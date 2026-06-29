@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Alexandria:wght@300;400;500;600;700&family=Almarai:wght@300;400;700&family=Cairo:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+@import "tailwindcss";
+
+:root {
+  --font-heading: 'Helvetica Now Display Bold', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --color-text: #192837;
+  --color-accent: #7342E2;
+  --color-login-bg: #F2F2EE;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-instrument: "Instrument Serif", "Playfair Display", serif;
+  --font-prata: "Prata", serif;
+  --font-bodoni: "Libre Bodoni", serif;
+  --font-baskerville: "Libre Baskerville", serif;
+  --font-changa: "Changa", sans-serif;
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+  --color-text-vault: var(--color-text);
+  --color-accent-vault: var(--color-accent);
+  --color-login-bg-vault: var(--color-login-bg);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+  }
+
+  body {
+    background-color: #FAF9F6; /* Extremely soft, cozy off-white linen shade */
+    color: #1F1E1C; /* Ink charcoal for reading comfort */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Completely remove any italic/athletic font styles across all elements */
+  *, *::before, *::after {
+    font-style: normal !important;
+  }
+}
+
+/* Custom premium scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(245, 244, 240, 0.4);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(184, 159, 131, 0.3);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(184, 159, 131, 0.6);
+}
+
+/* Soft delicate gradient shadows */
+.premium-shadow {
+  box-shadow: 0 4px 20px -2px rgba(139, 115, 85, 0.08), 
+              0 2px 6px -1px rgba(139, 115, 85, 0.04);
+}
+
+.premium-shadow-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.premium-shadow-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 30px -4px rgba(139, 115, 85, 0.12),
+              0 4px 12px -2px rgba(139, 115, 85, 0.06);
+}
+
+/* Soft atmospheric glowing accent */
+.glow-gold {
+  position: relative;
+}
+.glow-gold::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(135deg, #ECC29B, #D4AF37, #C59A6F);
+  z-index: -1;
+  filter: blur(10px);
+  opacity: 0.15;
+  transition: opacity 0.3s ease;
+  border-radius: inherit;
+}
+.glow-gold:hover::after {
+  opacity: 0.3;
+}

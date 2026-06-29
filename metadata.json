@@ -1,0 +1,6 @@
+{
+  "name": "Gift Store",
+  "description": "An elegant, interactive luxury Chinese traditional-themed gift store with curated catalogs, user-customizable registries, and an AI-powered Gift Finder.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
