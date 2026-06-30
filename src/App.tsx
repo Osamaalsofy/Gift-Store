@@ -35,6 +35,7 @@ import { Product, CartItem, GiftFinderRequest, GiftFinderResponse, GiftRegistry 
 import { safeStorage } from "./lib/storage";
 import { copyToClipboard } from "./lib/clipboard";
 import { t, Language } from "./lib/translate";
+import { isSupabaseConfigured, saveOrderToSupabase, saveRegistryToSupabase, saveInquiryToSupabase } from "./lib/supabase";
 import GildedSilkWaves from "./components/GildedSilkWaves";
 import InteractiveCard from "./components/InteractiveCard";
 import { HeroSection } from "./components/ui/hero-section-2";
@@ -458,7 +459,7 @@ export default function App() {
     setAlertMessage({ type, text });
   };
 
-  const handleInquirySubmit = (e: React.FormEvent) => {
+  const handleInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inquiryName.trim() || !inquiryEmail.trim() || !inquiryMessage.trim()) {
       triggerAlert("Please fill in all the traditional registry inquiries parchment spaces.", "error");
@@ -479,6 +480,23 @@ export default function App() {
     setUserInquiries(prev => [newInquiry, ...prev]);
     setInquirySuccess(true);
     triggerAlert("Your handwritten inquiry has been inscribed in our lacquer seal indices!", "success");
+
+    // Supabase Integration
+    if (isSupabaseConfigured()) {
+      const saved = await saveInquiryToSupabase({
+        inquiry_id: newInquiry.id,
+        name: newInquiry.name,
+        email: newInquiry.email,
+        specialty: newInquiry.specialty,
+        message: newInquiry.message,
+        callback: newInquiry.callback,
+        sealed: newInquiry.sealed,
+        date: newInquiry.date
+      });
+      if (saved) {
+        triggerAlert("Inquiry saved securely to your Supabase database!", "success");
+      }
+    }
   };
 
   // Cart operations
@@ -516,18 +534,45 @@ export default function App() {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
 
-  const handleCheckout = (e: React.FormEvent) => {
+  const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
+    const formEl = e.currentTarget as HTMLFormElement;
+    const formData = new FormData(formEl);
+    const notecard = formData.get("notecard")?.toString() || "";
+    const address = formData.get("address")?.toString() || "";
+
     const generatedOrder = "PP-" + Math.floor(100000 + Math.random() * 900000);
+    const cartSnapshot = [...cart];
+
     setOrderId(generatedOrder);
     setIsCheckoutSuccess(true);
     setCart([]);
     setIsCartOpen(false);
     triggerAlert("Your order was placed beautifully. Thank you!", "success");
+
+    // Supabase Integration
+    if (isSupabaseConfigured()) {
+      const itemsToSave = cartSnapshot.map(item => ({
+        id: item.product.id,
+        name: item.product.name,
+        price: item.product.price,
+        quantity: item.quantity
+      }));
+      const saved = await saveOrderToSupabase({
+        order_id: generatedOrder,
+        items: itemsToSave,
+        total: cartSnapshot.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+        address: address || "Pre-arranged Pickup",
+        notes: notecard
+      });
+      if (saved) {
+        triggerAlert("Order logged securely to your Supabase database!", "success");
+      }
+    }
   };
 
   // Registry operations
-  const createRegistry = (e: React.FormEvent) => {
+  const createRegistry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRegistryName.trim() || !newRegistryDate || !newRegistryRegistrant.trim()) {
       triggerAlert("Please fill in the Registrant Name, Registry Title, and celebration date.", "error");
@@ -564,6 +609,23 @@ export default function App() {
     setNewRegistryItems([]);
     
     triggerAlert(`Successfully published "${newRegistry.name}"!`, "success");
+
+    // Supabase Integration
+    if (isSupabaseConfigured()) {
+      const saved = await saveRegistryToSupabase({
+        registry_id: newRegistry.id,
+        name: newRegistry.name,
+        occasion: newRegistry.occasion,
+        date: newRegistry.date,
+        notes: newRegistry.notes,
+        registrant_name: newRegistry.registrantName,
+        email: newRegistry.email,
+        items: newRegistry.items
+      });
+      if (saved) {
+        triggerAlert("Registry synchronized to your Supabase cloud database!", "success");
+      }
+    }
   };
 
   const toggleProductForNewRegistry = (productId: string) => {
@@ -1164,6 +1226,7 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase tracking-widest text-[#666] font-medium block">Gift Note card message</label>
                   <textarea 
+                    name="notecard"
                     placeholder="E.g. Happy Celebration, Mother! May this hand-made Turkish towel and aroma diffuser carry absolute peace. (Optional)" 
                     className="w-full p-2 border border-[#E5E2DE] bg-[#F5F2EE] text-xs resize-none h-14 focus:outline-none focus:border-[#4A5D4E]"
                   />
@@ -1172,6 +1235,7 @@ export default function App() {
                 <div className="space-y-1.5">
                   <label className="text-[10px] uppercase tracking-widest text-[#666] font-medium block">Recipient Courier Address</label>
                   <input 
+                    name="address"
                     type="text" 
                     placeholder="128 Aesthetic Boulevard, Suite 50" 
                     required
