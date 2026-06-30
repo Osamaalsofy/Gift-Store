@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -536,6 +537,140 @@ Return ONLY valid JSON matching this schema:
 
   // Gracefully fallback to our beautiful dynamic fallback when API is offline or fails
   return res.json(getDynamicFallback());
+});
+
+const REGISTRIES_FILE = path.join(process.cwd(), "registries.json");
+const INQUIRIES_FILE = path.join(process.cwd(), "inquiries.json");
+
+// Helper to load registries from file database
+function loadRegistries() {
+  try {
+    if (fs.existsSync(REGISTRIES_FILE)) {
+      const data = fs.readFileSync(REGISTRIES_FILE, "utf8");
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Error reading registries file database:", err);
+  }
+  // Default demo registry
+  return [
+    {
+      id: "demo-wedding",
+      name: "Charlotte & Julian's Autumn Wedding",
+      occasion: "Wedding",
+      date: "2026-10-17",
+      notes: "Thank you all so much for celebrating our new beginnings with us. We curated this list with mindfulness.",
+      registrantName: "Charlotte & Julian",
+      email: "charlotte@heritage.com",
+      items: [
+        { productId: "organic-tea-set", quantityRequested: 1, quantityReceived: 0 },
+        { productId: "lavender-blanket", quantityRequested: 2, quantityReceived: 1 },
+        { productId: "essential-diffuser", quantityRequested: 1, quantityReceived: 1 },
+        { productId: "gourmet-cheese-board", quantityRequested: 1, quantityReceived: 0 }
+      ]
+    }
+  ];
+}
+
+// Helper to save registries to file database
+function saveRegistries(data: any) {
+  try {
+    fs.writeFileSync(REGISTRIES_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Error writing registries file database:", err);
+  }
+}
+
+// Helper to load inquiries from file database
+function loadInquiries() {
+  try {
+    if (fs.existsSync(INQUIRIES_FILE)) {
+      const data = fs.readFileSync(INQUIRIES_FILE, "utf8");
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Error reading inquiries file database:", err);
+  }
+  return [];
+}
+
+// Helper to save inquiries to file database
+function saveInquiries(data: any) {
+  try {
+    fs.writeFileSync(INQUIRIES_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Error writing inquiries file database:", err);
+  }
+}
+
+// REST API endpoints for Registries
+app.get("/api/db/registries", (req, res) => {
+  const registries = loadRegistries();
+  res.json({ success: true, registries });
+});
+
+app.post("/api/db/registries", (req, res) => {
+  const newRegistry = req.body;
+  if (!newRegistry || !newRegistry.id) {
+    return res.status(400).json({ success: false, error: "Invalid registry payload" });
+  }
+  const registries = loadRegistries();
+  const existsIndex = registries.findIndex((r: any) => r.id === newRegistry.id);
+  if (existsIndex > -1) {
+    registries[existsIndex] = newRegistry;
+  } else {
+    registries.unshift(newRegistry);
+  }
+  saveRegistries(registries);
+  res.json({ success: true, registry: newRegistry });
+});
+
+app.post("/api/db/registries/:id/claim", (req, res) => {
+  const { id } = req.params;
+  const { productId } = req.body;
+  if (!id || !productId) {
+    return res.status(400).json({ success: false, error: "Missing registry id or product id" });
+  }
+  const registries = loadRegistries();
+  const regIndex = registries.findIndex((r: any) => r.id === id);
+  if (regIndex === -1) {
+    return res.status(404).json({ success: false, error: "Registry not found" });
+  }
+  
+  registries[regIndex].items = registries[regIndex].items.map((item: any) => {
+    if (item.productId === productId) {
+      return {
+        ...item,
+        quantityReceived: item.quantityReceived + 1
+      };
+    }
+    return item;
+  });
+  
+  saveRegistries(registries);
+  res.json({ success: true, registry: registries[regIndex] });
+});
+
+// REST API endpoints for Inquiries
+app.get("/api/db/inquiries", (req, res) => {
+  const inquiries = loadInquiries();
+  res.json({ success: true, inquiries });
+});
+
+app.post("/api/db/inquiries", (req, res) => {
+  const newInquiry = req.body;
+  if (!newInquiry || !newInquiry.id) {
+    return res.status(400).json({ success: false, error: "Invalid inquiry payload" });
+  }
+  const inquiries = loadInquiries();
+  const existsIndex = inquiries.findIndex((i: any) => i.id === newInquiry.id);
+  if (existsIndex > -1) {
+    inquiries[existsIndex] = newInquiry;
+  } else {
+    inquiries.unshift(newInquiry);
+  }
+  saveInquiries(inquiries);
+  res.json({ success: true, inquiry: newInquiry });
 });
 
 // Configure Vite or Static Assets handling

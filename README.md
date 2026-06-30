@@ -12,6 +12,7 @@ PresentPerfect is a premium, beautifully crafted full-stack web application desi
 - **Calligraphy Greeting Cards**: Scribe custom parchment card messages written in elegant custom calligraphy.
 - **Cinematic Curation Engine**: Seamlessly integrates the Gemini API to analyze the tray's elements and synthesize a personalized *Certificate of Harmony* containing custom aesthetic vibe profiles, poetic sensory narratives, and presenting ceremony guides.
 - **Multilingual Support**: Fully localized in English and Arabic with high-fidelity, polished translations.
+- **Bespoke Correspondence**: An ultra-elegant heritage correspondence inquiry form complete with beautifully structured official receipts displaying inquirers' custom message entries, preferences, and details.
 - **Modern Polish**: Responsive layout built on sleek typography, generous negative space, smooth layout transitions, and high-contrast styling.
 
 ---

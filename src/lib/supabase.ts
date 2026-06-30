@@ -1,34 +1,20 @@
+/// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js';
 
-// Load variables from environment (Vite prefixes client-side env vars with VITE_)
-let rawSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || "https://vvdqwhnlkxruffcqslyh.supabase.co";
+// Verified default values for our project
+const DEFAULT_URL = "https://vvdqwhnlkxruffcqslyh.supabase.co";
+const DEFAULT_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2ZHF3aG5sa3hydWZmY3FzbHloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MDI5MTAsImV4cCI6MjA5ODM3ODkxMH0.xEmtdDbTP2hwZIVLYOweqLasM4ead5jC37-1xJgFBvQ";
+
+let rawSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim();
+let rawAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim();
+
+// Clean the URL if it contains pathing
 if (rawSupabaseUrl && typeof rawSupabaseUrl === 'string') {
-  rawSupabaseUrl = rawSupabaseUrl.trim();
   if (rawSupabaseUrl.includes('/rest/v1')) {
-    rawSupabaseUrl = rawSupabaseUrl.split('/rest/v1')[0];
+    rawSupabaseUrl = rawSupabaseUrl.split('/rest/v1')[0].trim();
   }
 }
-const supabaseUrl = rawSupabaseUrl;
 
-// Fallback logic for the Supabase Anon Key
-// The key provided starting with "sb_publishable_" is a Stripe or other external service publishable key.
-// The actual, correct Supabase Anon Key is the JSON Web Token (JWT) provided by the user previously.
-const DEFAULT_VALID_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2ZHF3aG5sa3hydWZmY3FzbHloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MDI5MTAsImV4cCI6MjA5ODM3ODkxMH0.xEmtdDbTP2hwZIVLYOweqLasM4ead5jC37-1xJgFBvQ";
-
-let tempAnonKey = ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY || "").trim();
-if (!tempAnonKey) {
-  tempAnonKey = "sb_publishable_e189_c7YhWteDej3ctBhfA_ozPRUwU0";
-}
-
-// Check if the key is not a valid JWT (does not contain standard dots or starts with 'sb_')
-if (!tempAnonKey.includes('.') || tempAnonKey.startsWith('sb_')) {
-  console.log("Supabase: Detected invalid/Stripe-like anon key. Falling back to the verified JWT anon key.");
-  tempAnonKey = DEFAULT_VALID_JWT;
-}
-
-const supabaseAnonKey = tempAnonKey;
-
-// Check if credentials are set
 const isValidUrl = (url: string) => {
   try {
     return url.startsWith('http://') || url.startsWith('https://');
@@ -37,19 +23,42 @@ const isValidUrl = (url: string) => {
   }
 };
 
-const isConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
-  isValidUrl(supabaseUrl)
-);
+let finalUrl = DEFAULT_URL;
+let finalAnonKey = DEFAULT_ANON_KEY;
+
+// Resolve URL: find whichever of rawSupabaseUrl or rawAnonKey is a valid http URL
+if (isValidUrl(rawSupabaseUrl)) {
+  finalUrl = rawSupabaseUrl;
+} else if (isValidUrl(rawAnonKey)) {
+  finalUrl = rawAnonKey;
+}
+
+// Resolve Key: prioritize publishable keys (anon), then fallback to secret keys, then default JWT
+if (rawAnonKey && rawAnonKey.startsWith('sb_publishable_')) {
+  finalAnonKey = rawAnonKey;
+} else if (rawSupabaseUrl && rawSupabaseUrl.startsWith('sb_publishable_')) {
+  finalAnonKey = rawSupabaseUrl;
+} else if (rawAnonKey && (rawAnonKey.startsWith('sb_secret_') || rawAnonKey.includes('.'))) {
+  finalAnonKey = rawAnonKey;
+} else if (rawSupabaseUrl && (rawSupabaseUrl.startsWith('sb_secret_') || rawSupabaseUrl.includes('.'))) {
+  finalAnonKey = rawSupabaseUrl;
+}
+
+// Ensure we fall back to DEFAULT_URL if no valid URL is found
+if (!isValidUrl(finalUrl)) {
+  finalUrl = DEFAULT_URL;
+}
+
+console.log("Supabase Client configuration parsed:", {
+  url: finalUrl,
+  keyPreview: finalAnonKey ? (finalAnonKey.substring(0, 15) + "...") : "None"
+});
 
 let supabaseClient = null;
-if (isConfigured) {
-  try {
-    supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
-  } catch (err) {
-    console.error('Failed to create Supabase client:', err);
-  }
+try {
+  supabaseClient = createClient(finalUrl, finalAnonKey);
+} catch (err) {
+  console.error('Failed to create Supabase client:', err);
 }
 
 export const supabase = supabaseClient;

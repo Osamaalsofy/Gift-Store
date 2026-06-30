@@ -8,6 +8,7 @@ import {
   X,
   Trash2,
   ChevronRight,
+  ChevronLeft,
   Plus,
   Minus,
   Info,
@@ -42,6 +43,7 @@ import { t, Language } from "./lib/translate";
 import { isSupabaseConfigured, saveOrderToSupabase, saveRegistryToSupabase, saveInquiryToSupabase } from "./lib/supabase";
 import GildedSilkWaves from "./components/GildedSilkWaves";
 import InteractiveCard from "./components/InteractiveCard";
+import ScrollStack, { ScrollStackItem } from "./components/ScrollStack";
 import { HeroSection } from "./components/ui/hero-section-2";
 
 const UKFlag = () => (
@@ -232,6 +234,17 @@ export default function App() {
   const [newRegistryItems, setNewRegistryItems] = useState<string[]>([]); // product IDs
   const [newRegistryEmail, setNewRegistryEmail] = useState<string>("");
   const [newRegistryRegistrant, setNewRegistryRegistrant] = useState<string>("");
+  const [activeFormCategory, setActiveFormCategory] = useState<string>("All");
+  const [selectedPresetPackage, setSelectedPresetPackage] = useState<string | null>(null);
+  const [registrySubmitted, setRegistrySubmitted] = useState<boolean>(false);
+  const registryCarouselRef = useRef<HTMLDivElement>(null);
+  const ceremonyFinalizedRef = useRef<boolean>(false);
+  const handleRegistryCarouselScroll = (direction: "left" | "right") => {
+    if (registryCarouselRef.current) {
+      const amount = direction === "left" ? -350 : 350;
+      registryCarouselRef.current.scrollBy({ left: amount, behavior: "smooth" });
+    }
+  };
 
   // AI Finder state
   const [aiFinderRequest, setAiFinderRequest] = useState<GiftFinderRequest>({
@@ -262,6 +275,8 @@ export default function App() {
   const [inquiryCallback, setInquiryCallback] = useState<boolean>(false);
   const [inquirySealEnvelope, setInquirySealEnvelope] = useState<boolean>(true);
   const [inquirySuccess, setInquirySuccess] = useState<boolean>(false);
+  const [isInquirySubmitting, setIsInquirySubmitting] = useState<boolean>(false);
+  const [supabaseInquiryResult, setSupabaseInquiryResult] = useState<{ success: boolean; message: string; isConfigured: boolean } | null>(null);
 
   // General Notification / Alert
   const [alertMessage, setAlertMessage] = useState<{ type: "success" | "info" | "error"; text: string } | null>(null);
@@ -292,6 +307,36 @@ export default function App() {
   const [ceremonyPhone, setCeremonyPhone] = useState<string>("");
   const [rubProgress, setRubProgress] = useState<number>(0);
   const [rubbedSuccessfully, setRubbedSuccessfully] = useState<boolean>(false);
+
+  // Automatically progress the ceremony rubbing stage smoothly and extremely quickly (e.g. over 800ms)
+  // to avoid users having to manually rub or getting stuck at 30%
+  useEffect(() => {
+    if (isCeremonyOpen && ceremonyStep === "rubbing") {
+      let currentProgress = 0;
+      const interval = setInterval(() => {
+        const increment = 6 + Math.random() * 8; // fast, dynamic and smooth progression
+        currentProgress += increment;
+        if (currentProgress >= 100) {
+          currentProgress = 100;
+          setRubProgress(100);
+          clearInterval(interval);
+          
+          if (!ceremonyFinalizedRef.current) {
+            ceremonyFinalizedRef.current = true;
+            finalizeCeremonyCuration();
+            setRubbedSuccessfully(true);
+            setCeremonyStep("ready");
+            triggerAlert("Curation seal bound successfully!", "success");
+          }
+        } else {
+          setRubProgress(Math.floor(currentProgress));
+        }
+      }, 40); // very quick updates (25 frames/sec)
+      return () => {
+        clearInterval(interval);
+      };
+    }
+  }, [isCeremonyOpen, ceremonyStep]);
 
   const generateGiftMixNarrative = async () => {
     if (mixerItems.length === 0) {
@@ -363,6 +408,7 @@ export default function App() {
       triggerAlert("Add items to your mix first!", "info");
       return;
     }
+    ceremonyFinalizedRef.current = false;
     setIsCeremonyOpen(true);
     setCeremonyStep("details");
     setRubProgress(0);
@@ -404,6 +450,40 @@ export default function App() {
     };
 
     addToCart(customProduct, 1);
+
+    // Synchronize to Supabase 'orders' table
+    if (isSupabaseConfigured()) {
+      const orderId = "PP-MIX-" + Math.floor(100000 + Math.random() * 900000);
+      const itemsToSave = mixerItems.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity
+      }));
+      // Add line item for packaging / bespoke curation services
+      itemsToSave.push({
+        id: "premium-packaging",
+        name: `Bespoke Presentation Tray (Wrapped in ${mixerWrapStyle} with ${mixerTieStyle} & ${mixerAccent})`,
+        price: 20.00 + (mixerIncludeCard ? 5.00 : 0),
+        quantity: 1
+      });
+
+      saveOrderToSupabase({
+        order_id: orderId,
+        items: itemsToSave,
+        total: totalPrice,
+        address: ceremonyAddress || "Atelier Boutique Pickup",
+        notes: `Custom Gift Curation for ${ceremonyName || "Anonymous"} (${ceremonyPhone || "No Phone"}, ${ceremonyEmail || "No Email"}). Calligraphy Message: ${mixerGreetingText || "None"}`
+      }).then(res => {
+        if (res.success) {
+          triggerAlert("Bespoke curation order logged securely to Supabase!", "success");
+        } else {
+          console.warn("Supabase mix order save warning:", res.error);
+        }
+      }).catch(err => {
+        console.error("Failed to save mix order to Supabase:", err);
+      });
+    }
   };
 
   // Persist state updates to localStorage
@@ -430,6 +510,33 @@ export default function App() {
       console.warn("Storage write blocked:", err);
     }
   }, [userInquiries]);
+
+  // Load and synchronize active registries & inquiries from backend server database
+  useEffect(() => {
+    const fetchDatabaseData = async () => {
+      try {
+        const regRes = await fetch("/api/db/registries");
+        const regData = await regRes.json();
+        if (regData.success && Array.isArray(regData.registries)) {
+          setRegistries(regData.registries);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch registries from server database:", err);
+      }
+
+      try {
+        const inqRes = await fetch("/api/db/inquiries");
+        const inqData = await inqRes.json();
+        if (inqData.success && Array.isArray(inqData.inquiries)) {
+          setUserInquiries(inqData.inquiries);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch inquiries from server database:", err);
+      }
+    };
+
+    fetchDatabaseData();
+  }, []);
 
   // Temporary automatic notification fade out
   useEffect(() => {
@@ -470,16 +577,18 @@ export default function App() {
 
 
   const triggerAlert = (text: string, type: "success" | "info" | "error" = "success") => {
-    setAlertMessage({ type, text });
+    // Alert system disabled per user request
   };
 
   const handleInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inquiryName.trim() || !inquiryEmail.trim() || !inquiryMessage.trim()) {
-      triggerAlert("Please fill in all the traditional registry inquiries parchment spaces.", "error");
       return;
     }
     
+    setIsInquirySubmitting(true);
+    setSupabaseInquiryResult(null);
+
     const newInquiry = {
       id: "inq-" + Date.now(),
       name: inquiryName,
@@ -491,28 +600,54 @@ export default function App() {
       date: new Date().toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' })
     };
 
-    setUserInquiries(prev => [newInquiry, ...prev]);
-    setInquirySuccess(true);
-    triggerAlert("Your handwritten inquiry has been inscribed in our lacquer seal indices!", "success");
+    // Server-side database synchronization
+    try {
+      await fetch("/api/db/inquiries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newInquiry)
+      });
+    } catch (err) {
+      console.warn("Failed to synchronize inquiry with the server database:", err);
+    }
 
     // Supabase Integration
-    if (isSupabaseConfigured()) {
+    const supabaseConfigured = isSupabaseConfigured();
+    if (supabaseConfigured) {
       const res = await saveInquiryToSupabase({
         inquiry_id: newInquiry.id,
         name: newInquiry.name,
         email: newInquiry.email,
         specialty: newInquiry.specialty,
         message: newInquiry.message,
-        callback: newInquiry.callback,
+        callback: newInquiry.callback ? "Requested" : "Not Requested",
         sealed: newInquiry.sealed,
         date: newInquiry.date
       });
       if (res.success) {
-        triggerAlert("Inquiry saved securely to your Supabase database!", "success");
+        setSupabaseInquiryResult({
+          success: true,
+          isConfigured: true,
+          message: "Succesfully saved and synchronized with your Supabase 'inquiries' table!"
+        });
       } else {
-        triggerAlert(`Supabase connection error: ${res.error || "Unknown database error"}`, "error");
+        setSupabaseInquiryResult({
+          success: false,
+          isConfigured: true,
+          message: res.error || "Unknown Supabase database error"
+        });
       }
+    } else {
+      setSupabaseInquiryResult({
+        success: false,
+        isConfigured: false,
+        message: "Supabase client is not initialized. Please verify your VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY variables in the .env file."
+      });
     }
+
+    setUserInquiries(prev => [newInquiry, ...prev]);
+    setIsInquirySubmitting(false);
+    setInquirySuccess(true);
   };
 
   // Cart operations
@@ -625,8 +760,24 @@ export default function App() {
     setNewRegistryRegistrant("");
     setNewRegistryEmail("");
     setNewRegistryItems([]);
+    setSelectedPresetPackage(null);
     
     triggerAlert(`Successfully published "${newRegistry.name}"!`, "success");
+
+    // Server-side database synchronization
+    try {
+      const serverRes = await fetch("/api/db/registries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newRegistry)
+      });
+      const serverData = await serverRes.json();
+      if (serverData.success) {
+        triggerAlert("Registry synchronized to the server database!", "success");
+      }
+    } catch (err) {
+      console.warn("Failed to synchronize registry with the server database:", err);
+    }
 
     // Supabase Integration
     if (isSupabaseConfigured()) {
@@ -645,7 +796,32 @@ export default function App() {
       } else {
         triggerAlert(`Supabase connection error: ${res.error || "Unknown database error"}`, "error");
       }
+
+      // Also save to 'orders' table as requested by user
+      const registryItemsDetails = newRegistry.items.map(it => {
+        const p = CATALOG.find(prod => prod.id === it.productId);
+        return {
+          id: it.productId,
+          name: p ? p.name : "Custom Package Item",
+          price: p ? p.price : 0,
+          quantity: it.quantityRequested
+        };
+      });
+      const orderTotal = registryItemsDetails.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const registryOrderRes = await saveOrderToSupabase({
+        order_id: "ORD-" + newRegistry.id,
+        items: registryItemsDetails,
+        total: orderTotal,
+        address: `Registry for ${newRegistry.registrantName} (${newRegistry.email})`,
+        notes: `Milestone Registry Event: ${newRegistry.name} (Occasion: ${newRegistry.occasion}, Date: ${newRegistry.date}). Notes: ${newRegistry.notes || ""}`
+      });
+      if (registryOrderRes.success) {
+        triggerAlert("Registry order synchronized to Supabase orders table!", "success");
+      } else {
+        console.warn("Failed to log registry to orders table:", registryOrderRes.error);
+      }
     }
+    setRegistrySubmitted(true);
   };
 
   const toggleProductForNewRegistry = (productId: string) => {
@@ -657,7 +833,7 @@ export default function App() {
     });
   };
 
-  const contributeToRegistryItem = (registryId: string, productId: string) => {
+  const contributeToRegistryItem = async (registryId: string, productId: string) => {
     setRegistries(prev => {
       return prev.map(reg => {
         if (reg.id === registryId) {
@@ -667,7 +843,7 @@ export default function App() {
               if (item.productId === productId) {
                 const targetProd = CATALOG.find(p => p.id === productId);
                 triggerAlert(`You have beautifully gifted an item from this registry: ${targetProd?.name || 'Selected Item'}!`, "success");
-                return { ...item, quantityReceived: Math.min(item.quantityRequested + 2, item.quantityReceived + 1) };
+                return { ...item, quantityReceived: item.quantityReceived + 1 };
               }
               return item;
             })
@@ -676,6 +852,16 @@ export default function App() {
         return reg;
       });
     });
+
+    try {
+      await fetch(`/api/db/registries/${registryId}/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId })
+      });
+    } catch (err) {
+      console.warn("Failed to synchronize claimed item with backend database:", err);
+    }
   };
 
   const toggleHobby = (hobby: string) => {
@@ -869,30 +1055,13 @@ export default function App() {
       }}
     >
       
-      {/* Alert Banner */}
-      {alertMessage && (
-        <div 
-          id="system-notification"
-          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-4 border text-xs tracking-wider uppercase font-medium animate-bounce premium-shadow ${
-            alertMessage.type === "success" 
-              ? "bg-[#4A5D4E] text-white border-[#4A5D4E]" 
-              : alertMessage.type === "error"
-              ? "bg-red-950 text-red-200 border-red-800"
-              : "bg-[#F5F2EE] text-[#1A1A1A] border-[#E5E2DE]"
-          }`}
-        >
-          <span>{alertMessage.text}</span>
-          <button onClick={() => setAlertMessage(null)} className="ml-3 hover:opacity-50">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
+      {/* Alert Banner deleted per user request */}
 
       {/* Styled Navigation Header */}
       <header id="site-header" className="sticky top-0 bg-[#FAF7F1]/95 backdrop-blur-md z-40 border-b border-[#E2D8C2] transition-all duration-350">
         
         {/* DESKTOP HEADER LAYOUT */}
-        <div className="hidden xl:grid grid-cols-[1fr_auto_1fr] max-w-[1700px] mx-auto px-6 xl:px-12 h-24 items-center gap-6">
+        <div className="hidden lg:grid grid-cols-[1fr_auto_1fr] max-w-[1700px] mx-auto px-6 lg:px-12 h-24 items-center gap-6">
           
           {/* Left: Navigation links */}
           <div className="flex gap-6 lg:gap-8 text-xs lg:text-[13px] uppercase tracking-[0.2em] font-bold justify-start items-center">
@@ -937,6 +1106,18 @@ export default function App() {
             >
               {translate("Our History")}
             </button>
+            <button 
+              onClick={() => setActiveTab("inquiry")}
+              className={`p-2.5 bg-[#F5F2EE] border border-[#E2D8C2] text-[#1C1814] h-9 flex items-center gap-1.5 px-4 rounded-md cursor-pointer transition-all hover:bg-[#EAE7E2] hover:border-[#4A5D4E]/50 ${
+                activeTab === "inquiry" ? "bg-[#4A5D4E] text-white border-[#4A5D4E]" : ""
+              }`}
+              aria-label="Direct Inquiry Form"
+            >
+              <Mail className={`w-3.5 h-3.5 ${activeTab === "inquiry" ? "text-white" : "text-[#4A5D4E]"}`} />
+              <span className={`text-[10px] uppercase tracking-wider font-extrabold ${activeTab === "inquiry" ? "text-white" : "text-gray-700"}`}>
+                {translate("Inquire")}
+              </span>
+            </button>
             
             <span className="text-[#E2D8C2] inline-block h-5 w-px shrink-0"></span>
 
@@ -964,7 +1145,7 @@ export default function App() {
         </div>
 
         {/* MOBILE HEADER LAYOUT */}
-        <div className="flex xl:hidden h-16 px-4 justify-between items-center w-full">
+        <div className="flex lg:hidden h-16 px-4 justify-between items-center w-full">
           {/* Mobile Menu Button - Traditional Aesthetic */}
           <button 
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -1018,7 +1199,7 @@ export default function App() {
 
         {/* MOBILE ACCORDION DROP DOWN MENU */}
         {mobileMenuOpen && (
-          <div className="xl:hidden border-t border-[#E2D8C2] bg-[#FAF7F1] w-full animate-fade-in divide-y divide-[#E2D8C2]/40 pb-4">
+          <div className="lg:hidden border-t border-[#E2D8C2] bg-[#FAF7F1] w-full animate-fade-in divide-y divide-[#E2D8C2]/40 pb-4">
             <div className="px-6 py-4 flex flex-col space-y-3.5 text-xs uppercase tracking-[0.2em] font-semibold text-[#1C1814]">
               <button 
                 onClick={() => { setActiveTab("shop"); setSelectedCategory("All"); setMobileMenuOpen(false); }}
@@ -1667,162 +1848,75 @@ export default function App() {
               </h2>
               <div className="w-12 h-0.5 bg-[#A68B67] mx-auto mb-4" />
               <p className="text-xs md:text-sm text-[#666] leading-relaxed uppercase tracking-widest">
-                {translate("Planning a Wedding, Milestone Birthday, Graduation, or special Engagement? Register your details, choose your premium packages, select your favorite products, and share your personalized parchment with loved ones.")}
+                {translate("Planning a Wedding, Milestone Birthday, Graduation, or special Engagement? Register your details, choose your premium packages, select your favorite products, and share your personalized wishlist with loved ones.")}
               </p>
             </div>
 
-            {/* CURATED CELEBRATION OFFERS & PACKAGES */}
-            <div className="space-y-6">
-              <div className="flex flex-col md:flex-row justify-between items-baseline border-b border-[#E2D8C2] pb-3">
-                <div>
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-[#A68B67] font-bold block">{translate("Exclusive Collections")}</span>
-                  <h3 className="text-xl md:text-2xl font-instrument font-normal text-[#1C1814]">{translate("Curated Milestone Packages")}</h3>
-                </div>
-                <span className="text-xs text-sans text-gray-550 italic font-medium">{translate("Select a package below to instantly populate and configure your registry form")}</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                
-                {/* WEDDING & ENGAGEMENT PACKAGE */}
-                <InteractiveCard className="bg-[#FAF9F6] border border-[#E2D8C2] p-6 hover:shadow-md transition-all flex flex-col justify-between space-y-4 relative group" glowColor="74, 93, 78">
-                  <div className="absolute top-0 left-0 w-full h-1 bg-[#4A5D4E]/40" />
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-[9px] uppercase tracking-widest font-bold text-amber-800 bg-amber-50 px-2 py-0.5 border border-amber-200">{translate("💍 Weddings & Engagements")}</span>
-                      <span className="font-mono text-gray-400 text-[10px]">{translate("Heirloom Suite")}</span>
-                    </div>
-                    <h4 className="text-lg font-serif font-bold text-[#1C1814] group-hover:text-[#4A5D4E] transition-colors">{translate("Supreme Wedding & Engagement Ceremony")}</h4>
-                    <p className="text-xs text-gray-650 leading-relaxed font-sans font-medium">
-                      {translate("Designed for traditional marital unions, engagement parties, and elegant milestones. Imbued with tranquility, warmth, and lifelong presence.")}
+            {/* Reorganized into a beautiful, centered, bigger, and highly clean single-column layout */}
+            <div className="max-w-4xl mx-auto w-full">
+              {registrySubmitted ? (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.4 }}
+                  className="bg-[#FAF7F1] p-10 sm:p-16 border border-[#E2D8C2] rounded-xl text-center space-y-8 animate-fade-in"
+                >
+                  <div className="mx-auto w-16 h-16 rounded-full bg-[#4A5D4E]/10 flex items-center justify-center">
+                    <Check className="w-8 h-8 text-[#4A5D4E]" />
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-[#A68B67] block">
+                      {translate("Milestone Curation Placed")}
+                    </span>
+                    <h3 className="text-2xl sm:text-3xl font-serif text-[#1C1814] font-bold leading-tight">
+                      {translate("Your request has been placed, and we will contact you as soon as possible.")}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-gray-600 max-w-lg mx-auto leading-relaxed pt-2">
+                      {translate("Thank you for choosing PresentPerfect. Our concierge team has logged your registry and bespoke bundle selections. A dedicated curator will review your requirements and reach out to you shortly to coordinate your special ceremony details.")}
                     </p>
-                    <div className="pt-2">
-                      <span className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Pre-curated Items Included:")}</span>
-                      <ul className="text-[11px] text-gray-600 list-inside list-disc space-y-0.5 font-sans font-medium">
-                        <li>{translate("Imperial Celadon Jade Tea Ritual Set")}</li>
-                        <li>{translate("Nirvana Hand-Poured Amber Soy Candle")}</li>
-                        <li>{translate("Organic Acacia Wood Cheese-board Set")}</li>
-                        <li>{translate("Luna Glass Orb Hanging Terrarium")}</li>
-                      </ul>
-                    </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setNewRegistryOccasion("Wedding");
-                      setNewRegistryName("Aesthetic Wedding & Marriage Ritual");
-                      setNewRegistryNotes("We have custom-selected the classic Wedding & Engagement Ceremony curation list. Welcome to our guests!");
-                      setNewRegistryItems(["organic-tea-set", "amber-soy-candle", "gourmet-cheese-board", "glass-terrarium"]);
-                      triggerAlert("Preloaded the Wedding & Engagement packages list inside the form slots below!", "success");
-                      const formElement = document.getElementById("registry-creator-form");
-                      if (formElement) formElement.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="w-full py-2 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-wider hover:bg-[#3d4d40] transition-colors font-bold cursor-pointer"
-                  >
-                    {translate("Select & Customize Package")}
-                  </button>
-                </InteractiveCard>
 
-                {/* BIRTHDAY & SOLAR RETURN PACKAGE */}
-                <InteractiveCard className="bg-[#FAF9F6] border border-[#E2D8C2] p-6 hover:shadow-md transition-all flex flex-col justify-between space-y-4 relative group" glowColor="166, 139, 103">
-                  <div className="absolute top-0 left-0 w-full h-1 bg-[#A68B67]/40" />
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-[9px] uppercase tracking-widest font-bold text-teal-800 bg-teal-50 px-2 py-0.5 border border-teal-200">{translate("🎂 Solar Cycle return")}</span>
-                      <span className="font-mono text-gray-400 text-[10px]">{translate("Comfort Suite")}</span>
-                    </div>
-                    <h4 className="text-lg font-serif font-bold text-[#1C1814] group-hover:text-[#4A5D4E] transition-colors">{translate("Artisanal Birthday Milestone")}</h4>
-                    <p className="text-xs text-gray-650 leading-relaxed font-sans font-medium">
-                      {translate("Honoring milestones and quiet personal retreats with warm sensory pleasures. Curated for local home comfort, deep relaxation, and tasting notes.")}
-                    </p>
-                    <div className="pt-2">
-                      <span className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Pre-curated Items Included:")}</span>
-                      <ul className="text-[11px] text-gray-600 list-inside list-disc space-y-0.5 font-sans font-medium">
-                        <li>{translate("Aura Artisanal Chocolate Truffles")}</li>
-                        <li>{translate("Cloud-knit Lavender Fleece Throw")}</li>
-                        <li>{translate("Imperial Jade Sandstone Fragrance Diffuser")}</li>
-                        <li>{translate("Waffle-Weave Turkish Cotton Bathrobe")}</li>
-                      </ul>
-                    </div>
+                  <div className="w-20 h-px bg-[#E2D8C2] mx-auto" />
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setRegistrySubmitted(false)}
+                      className="px-8 py-3.5 bg-[#4A5D4E] hover:bg-[#3d4d40] text-white text-xs uppercase tracking-widest font-black transition-all cursor-pointer rounded-lg shadow-sm"
+                    >
+                      {translate("Build Another Celebration Registry")}
+                    </button>
                   </div>
-                  <button
-                    onClick={() => {
-                      setNewRegistryOccasion("Birthday Celebration");
-                      setNewRegistryName("Grand Birthday Celebration Curation");
-                      setNewRegistryNotes("We have pre-selected the comfort-inspired Birthday Milestone list for organic self-care. Join us!");
-                      setNewRegistryItems(["gourmet-chocolates", "lavender-blanket", "essential-diffuser", "organic-robe"]);
-                      triggerAlert("Preloaded the Artisanal Birthday packages list inside the form slots below!", "success");
-                      const formElement = document.getElementById("registry-creator-form");
-                      if (formElement) formElement.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="w-full py-2 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-wider hover:bg-[#3d4d40] transition-colors font-bold cursor-pointer"
-                  >
-                    {translate("Select & Customize Package")}
-                  </button>
-                </InteractiveCard>
-
-                {/* GRADUATION & SCHOLAR PACKAGE */}
-                <InteractiveCard className="bg-[#FAF9F6] border border-[#E2D8C2] p-6 hover:shadow-md transition-all flex flex-col justify-between space-y-4 relative group" glowColor="59, 130, 246">
-                  <div className="absolute top-0 left-0 w-full h-1 bg-blue-900/40" />
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-[9px] uppercase tracking-widest font-bold text-blue-800 bg-blue-50 px-2 py-0.5 border border-blue-200">{translate("🎓 Scholar Achievement")}</span>
-                      <span className="font-mono text-gray-400 text-[10px]">{translate("Workspace Suite")}</span>
-                    </div>
-                    <h4 className="text-lg font-serif font-bold text-[#1C1814] group-hover:text-[#4A5D4E] transition-colors">{translate("Academic Graduation Package")}</h4>
-                    <p className="text-xs text-gray-650 leading-relaxed font-sans font-medium">
-                      {translate("An authentic tribute to educational success, creative growth, and office spaces. Tailored for writing, technical wonders, and tactile Oak keyboarding.")}
-                    </p>
-                    <div className="pt-2">
-                      <span className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Pre-curated Items Included:")}</span>
-                      <ul className="text-[11px] text-gray-600 list-inside list-disc space-y-0.5 font-sans font-medium">
-                        <li>{translate("Classic Oak Wood Mechanical Keyboard")}</li>
-                        <li>{translate("Emperor Tan Leather Journal Set")}</li>
-                        <li>{translate("Forest Walnut Wooden Wireless Charger")}</li>
-                        <li>{translate("Aura Smart Sound-Cancelling Relaxation Mask")}</li>
-                        <li>{translate("Retro-Chic Instant Polaroid Camera")}</li>
-                      </ul>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setNewRegistryOccasion("Retirement Rest"); // maps directly as special Graduation category
-                      setNewRegistryName("Academic Graduate Achievement Portfolio");
-                      setNewRegistryNotes("We have populated our academic list with elegant retro writing logs and workspace materials for deep focus.");
-                      setNewRegistryItems(["retro-keyboard", "leather-journal", "wooden-charger", "ambient-eye-mask", "instant-camera"]);
-                      triggerAlert("Preloaded the Graduation Scholar packages list inside the form slots below!", "success");
-                      const formElement = document.getElementById("registry-creator-form");
-                      if (formElement) formElement.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="w-full py-2 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-wider hover:bg-[#3d4d40] transition-colors font-bold cursor-pointer"
-                  >
-                    {translate("Select & Customize Package")}
-                  </button>
-                </InteractiveCard>
-
-              </div>
-            </div>
-
-            {/* Registry Creator Panel Form */}
-            <InteractiveCard 
-              as="form"
-              id="registry-creator-form"
-              onSubmit={createRegistry} 
-              className="bg-white p-6 sm:p-10 border border-[#E2D8C2] premium-shadow space-y-8 animate-fade-in scroll-mt-24"
-              glowColor="74, 93, 78"
-            >
-                <div className="border-b border-[#F0EDEA] pb-3 mb-2 flex justify-between items-center">
-                  <div>
-                    <span className="text-[11px] uppercase tracking-[0.25em] font-bold text-[#4A5D4E]">{translate("Traditional Package Selection")}</span>
-                    <h3 className="text-xl font-instrument font-normal text-gray-900">{translate("Configure Milestone Details")}</h3>
-                  </div>
-                  <span className="text-[10px] uppercase font-bold text-gray-400 bg-gray-100 px-3 py-1 rounded">{translate("Fill Form")}</span>
+                </motion.div>
+              ) : (
+                <form 
+                  id="registry-creator-form"
+                  onSubmit={createRegistry} 
+                  className="bg-[#FAF7F1] p-8 sm:p-12 border border-[#E2D8C2] rounded-xl space-y-8 animate-fade-in scroll-mt-24"
+                >
+                <div className="border-b border-[#E2D8C2]/60 pb-6 text-center">
+                  <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#A68B67] block mb-1">
+                    {translate("Traditional Package Selection")}
+                  </span>
+                  <h3 className="text-2xl font-serif text-[#1C1814] font-bold leading-tight">
+                    {translate("Configure Milestone Details")}
+                  </h3>
+                  <p className="text-xs text-gray-550 max-w-md mx-auto mt-2">
+                    {translate("Configure your celebration registry below and choose the items matching your selected occasion.")}
+                  </p>
                 </div>
 
                 {/* Section A: Register Name & Email details */}
-                <div className="space-y-4">
-                  <h4 className="text-[10px] uppercase tracking-[0.15em] font-bold text-[#A68B67] border-b border-gray-100 pb-1">{translate("1. Registrant Account (Register name)")}</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-6">
+                  <div className="border-b border-[#E2D8C2]/40 pb-2 text-left">
+                    <h4 className="text-[11px] uppercase tracking-[0.15em] font-bold text-[#4A5D4E]">
+                      {translate("Registrant Account")}
+                    </h4>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
                     <div>
-                      <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-registrant-name">
+                      <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-registrant-name">
                         {translate("Registrant / Full Name *")}
                       </label>
                       <input
@@ -1832,12 +1926,12 @@ export default function App() {
                         placeholder="E.g. Osama Alsofy"
                         value={newRegistryRegistrant}
                         onChange={(e) => setNewRegistryRegistrant(e.target.value)}
-                        className="w-full h-11 px-3 border border-[#E5E2DE] text-xs focus:outline-none focus:border-[#4A5D4E] font-medium"
+                        className="w-full h-12 px-4 border border-[#E2D8C2] text-sm focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg font-medium bg-white"
                       />
                     </div>
 
                     <div>
-                      <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-registrant-email">
+                      <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-registrant-email">
                         {translate("Contact Email Address *")}
                       </label>
                       <input
@@ -1847,18 +1941,22 @@ export default function App() {
                         placeholder="E.g. name@heritage.com"
                         value={newRegistryEmail}
                         onChange={(e) => setNewRegistryEmail(e.target.value)}
-                        className="w-full h-11 px-3 border border-[#E5E2DE] text-xs focus:outline-none focus:border-[#4A5D4E] font-medium"
+                        className="w-full h-12 px-4 border border-[#E2D8C2] text-sm focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg font-medium bg-white"
                       />
                     </div>
                   </div>
                 </div>
 
                 {/* Section B: Occasion Information */}
-                <div className="space-y-4 pt-2">
-                  <h4 className="text-[10px] uppercase tracking-[0.15em] font-bold text-[#A68B67] border-b border-gray-100 pb-1">{translate("2. Celebrative Metadata")}</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div className="space-y-6 pt-2">
+                  <div className="border-b border-[#E2D8C2]/40 pb-2 text-left">
+                    <h4 className="text-[11px] uppercase tracking-[0.15em] font-bold text-[#4A5D4E]">
+                      {translate("Celebration Metadata")}
+                    </h4>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
                     <div>
-                      <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-title">
+                      <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-title">
                         {translate("Package Custom Title *")}
                       </label>
                       <input
@@ -1868,19 +1966,19 @@ export default function App() {
                         placeholder="E.g. Sarah & Mark's Grand Wedding Ceremony"
                         value={newRegistryName}
                         onChange={(e) => setNewRegistryName(e.target.value)}
-                        className="w-full h-11 px-3 border border-[#E5E2DE] text-xs focus:outline-none focus:border-[#4A5D4E] font-medium"
+                        className="w-full h-12 px-4 border border-[#E2D8C2] text-sm focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg font-medium bg-white"
                       />
                     </div>
 
                     <div>
-                      <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-occasion">
-                        {translate("Aesthetic Occasion Catagory")}
+                      <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-occasion">
+                        {translate("Aesthetic Occasion Category")}
                       </label>
                       <select
                         id="reg-occasion"
                         value={newRegistryOccasion}
                         onChange={(e: any) => setNewRegistryOccasion(e.target.value)}
-                        className="w-full h-11 px-2 border border-[#E5E2DE] text-xs focus:outline-none focus:border-[#4A5D4E] font-medium"
+                        className="w-full h-12 px-3 border border-[#E2D8C2] text-sm focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg cursor-pointer font-medium bg-white"
                       >
                         <option value="Wedding">{translate("Wedding Event")}</option>
                         <option value="Anniversary">{translate("Anniversary celebration")}</option>
@@ -1893,7 +1991,7 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-date">
+                      <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-date">
                         {translate("Celebration Date *")}
                       </label>
                       <input
@@ -1902,108 +2000,366 @@ export default function App() {
                         required
                         value={newRegistryDate}
                         onChange={(e) => setNewRegistryDate(e.target.value)}
-                        className="w-full h-11 px-3 border border-[#E5E2DE] text-xs focus:outline-none focus:border-[#4A5D4E] font-medium"
+                        className="w-full h-12 px-4 border border-[#E2D8C2] text-sm focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg font-medium bg-white"
                       />
                     </div>
                   </div>
                 </div>
 
                 {/* Section C: Guest Notes */}
-                <div className="space-y-2">
-                  <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5" htmlFor="reg-desc">
-                    {translate("Greetings parchment notes for loved guests")}
-                  </label>
-                  <textarea
-                    id="reg-desc"
-                    placeholder={translate("Provide a heartwarming sentence introducing your celebration wishlist records...")}
-                    value={newRegistryNotes}
-                    onChange={(e) => setNewRegistryNotes(e.target.value)}
-                    className="w-full p-3 border border-[#E5E2DE] text-xs h-20 resize-none focus:outline-none focus:border-[#4A5D4E] font-sans font-medium"
-                  />
+                <div className="space-y-6 pt-2">
+                  <div className="border-b border-[#E2D8C2]/40 pb-2 text-left">
+                    <h4 className="text-[11px] uppercase tracking-[0.15em] font-bold text-[#4A5D4E]">
+                      {translate("Greetings Message for Guests")}
+                    </h4>
+                  </div>
+                  <div className="space-y-2 text-left">
+                    <label className="block text-[11px] uppercase tracking-[0.2em] text-[#A68B67] font-bold mb-2" htmlFor="reg-desc">
+                      {translate("Greetings parchment notes for loved guests")}
+                    </label>
+                    <textarea
+                      id="reg-desc"
+                      placeholder={translate("Provide a heartwarming sentence introducing your celebration wishlist records...")}
+                      value={newRegistryNotes}
+                      onChange={(e) => setNewRegistryNotes(e.target.value)}
+                      className="w-full p-4 border border-[#E2D8C2] text-sm h-28 resize-none focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] focus:border-[#4A5D4E] transition-all rounded-lg font-sans font-medium bg-white"
+                    />
+                  </div>
                 </div>
 
-                {/* Section D: Each one of those categories, LIST OF THINGS you can choose from it */}
-                <div className="space-y-4 pt-2">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-150 pb-1.5 gap-2">
-                    <h4 className="text-[10px] uppercase tracking-[0.15em] font-bold text-[#A68B67]">
-                      {translate("3. Category specific choices list")}
-                    </h4>
-                    <span className="text-[10px] text-[#4A5D4E] font-bold uppercase tracking-wider bg-[#4A5D4E]/5 px-2.5 py-0.5 border border-[#4A5D4E]/20">
-                      {translate("Currently Selected:")} {newRegistryItems.length} {translate("curated goods")}
-                    </span>
-                  </div>
+                {/* Section D: Theme Packages & Curated Categories selection list */}
+                <div className="space-y-8 pt-4">
+                  
+                  {/* Part 1: Bring back the packages (Pre-configured premium theme presets) */}
+                  <div className="space-y-4">
+                    <div className="border-b border-[#E2D8C2]/45 pb-2 text-left">
+                      <h4 className="text-[11px] uppercase tracking-[0.2em] font-bold text-[#4A5D4E]">
+                        {translate("Step 1: Choose a Premium Pre-configured Package (Optional)")}
+                      </h4>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {translate("Select one of our luxury artisanal packages to instantly pre-populate your wishlist with perfectly paired heirloom goods.")}
+                      </p>
+                    </div>
 
-                  <p className="text-[11px] text-gray-500 font-sans block leading-normal italic">
-                    {translate("Below is the recommended, artisanal choice array matching your selected occasion category. Click item layout cards to check/uncheck your desired selection.")}
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    {(() => {
-                      // Dynamically render list representing only that category for highly optimized selection
-                      let categoryGoodsIds: string[] = [];
-                      if (newRegistryOccasion === "Wedding" || newRegistryOccasion === "Engagement Ceremony") {
-                        categoryGoodsIds = ["organic-tea-set", "amber-soy-candle", "gourmet-cheese-board", "glass-terrarium"];
-                      } else if (newRegistryOccasion === "Birthday Celebration") {
-                        categoryGoodsIds = ["gourmet-chocolates", "lavender-blanket", "essential-diffuser", "organic-robe"];
-                      } else if (newRegistryOccasion === "Retirement Rest") { // maps graduation
-                        categoryGoodsIds = ["retro-keyboard", "leather-journal", "wooden-charger", "ambient-eye-mask", "instant-camera"];
-                      } else {
-                        // All general items
-                        categoryGoodsIds = CATALOG.map(p => p.id);
-                      }
-
-                      // Filter products
-                      const currentSelectionProducts = CATALOG.filter(p => categoryGoodsIds.includes(p.id));
-
-                      return currentSelectionProducts.map(prod => {
-                        const isChecked = newRegistryItems.includes(prod.id);
-                        return (
+                    <div className="w-full">
+                      <ScrollStack
+                        itemDistance={30}
+                        itemScale={0.02}
+                        itemStackDistance={16}
+                        stackPosition="12%"
+                        scaleEndPosition="4%"
+                        baseScale={0.93}
+                        rotationAmount={0.4}
+                        blurAmount={1}
+                        useWindowScroll={false}
+                        className="bg-white/40 border border-[#E2D8C2]/40 rounded-2xl p-4"
+                      >
+                        {/* Package A */}
+                        <ScrollStackItem>
                           <div
-                            key={prod.id}
-                            onClick={() => toggleProductForNewRegistry(prod.id)}
-                            className={`p-3.5 border flex gap-3 items-center cursor-pointer select-none transition-all duration-300 relative ${
-                              isChecked ? "bg-[#4A5D4E]/5 border-[#4A5D4E]" : "bg-[#FAFDFB] border-[#E2D8C2] opacity-80 hover:opacity-100 hover:bg-[#FAF9F6]"
+                            onClick={() => {
+                              const items = ["organic-tea-set", "gourmet-cheese-board", "amber-soy-candle", "glass-terrarium"];
+                              setNewRegistryItems(items);
+                              setSelectedPresetPackage("classic");
+                              triggerAlert("Selected: Heritage Classic Union Package!", "success");
+                            }}
+                            className={`p-6 border-2 cursor-pointer rounded-2xl transition-all relative flex flex-col md:flex-row gap-6 items-start md:items-center ${
+                              selectedPresetPackage === "classic" 
+                                ? "bg-[#4A5D4E]/10 border-[#4A5D4E] shadow-sm ring-1 ring-[#4A5D4E]" 
+                                : "bg-white border-[#E2D8C2] hover:bg-[#FAF9F6] hover:border-[#A68B67]"
                             }`}
                           >
-                            <div className={`w-4 h-4 border-2 flex items-center justify-center shrink-0 rounded-sm transition-all ${
-                              isChecked ? "bg-[#4A5D4E] border-[#4A5D4E]" : "border-[#A68B67]"
-                            }`}>
-                              {isChecked && <Check className="w-3 h-3 text-white stroke-[3px]" />}
-                            </div>
-
-                            <img src={prod.image} alt={prod.name} referrerPolicy="no-referrer" className="w-10 h-12 object-cover shrink-0 select-none bg-gray-150 rounded-sm" />
-
-                            <div className="min-w-0 flex-1">
-                              <h5 className="text-[11px] font-bold text-[#1C1814] truncate uppercase tracking-widest">{translate(prod.name)}</h5>
-                              <div className="flex justify-between items-center mt-1">
-                                <span className="text-[11px] font-bold text-[#A68B67] font-mono">${prod.price.toFixed(2)}</span>
-                                <span className="text-[9px] text-gray-400">{translate("Class: " + prod.category)}</span>
+                            <div className="flex-1 space-y-2">
+                              <div className="flex justify-between items-start">
+                                <span className="text-[10px] uppercase tracking-widest bg-[#A68B67] text-white px-2.5 py-1 font-bold rounded">
+                                  {translate("Heritage Classic")}
+                                </span>
+                                <div className={`w-5 h-5 border rounded-full flex items-center justify-center ${
+                                  selectedPresetPackage === "classic" ? "bg-[#4A5D4E] border-[#4A5D4E]" : "border-[#A68B67]"
+                                }`}>
+                                  {selectedPresetPackage === "classic" && <Check className="w-3 h-3 text-white" />}
+                                </div>
                               </div>
+                              <h5 className="text-base font-serif font-bold text-[#1C1814]">{translate("Classic Union Set")}</h5>
+                              <p className="text-xs text-gray-500">
+                                {translate("A traditional union of classical ceramics, artisan boards, and botanical ambient accents.")}
+                              </p>
+                            </div>
+                            <div className="w-full md:w-64 text-xs space-y-1 text-[#4A5D4E] font-medium border-t md:border-t-0 md:border-l border-[#F0EDEA] pt-3 md:pt-0 md:pl-5 shrink-0">
+                              <span className="text-[10px] uppercase tracking-widest text-gray-400 font-extrabold block mb-1.5">{translate("Curated Items Included:")}</span>
+                              <div>• {translate("Imperial Celadon Jade Tea Set")}</div>
+                              <div>• {translate("Organic Acacia Wood Cheese-board")}</div>
+                              <div>• {translate("Nirvana Hand-Poured Amber Candle")}</div>
+                              <div>• {translate("Luna Glass Orb Hanging Terrarium")}</div>
                             </div>
                           </div>
-                        );
-                      });
-                    })()}
+                        </ScrollStackItem>
+
+                        {/* Package B */}
+                        <ScrollStackItem>
+                          <div
+                            onClick={() => {
+                              const items = ["lavender-blanket", "essential-diffuser", "organic-robe", "gourmet-chocolates"];
+                              setNewRegistryItems(items);
+                              setSelectedPresetPackage("wellness");
+                              triggerAlert("Selected: Cozy Mindful Wellness Package!", "success");
+                            }}
+                            className={`p-6 border-2 cursor-pointer rounded-2xl transition-all relative flex flex-col md:flex-row gap-6 items-start md:items-center ${
+                              selectedPresetPackage === "wellness" 
+                                ? "bg-[#4A5D4E]/10 border-[#4A5D4E] shadow-sm ring-1 ring-[#4A5D4E]" 
+                                : "bg-white border-[#E2D8C2] hover:bg-[#FAF9F6] hover:border-[#A68B67]"
+                            }`}
+                          >
+                            <div className="flex-1 space-y-2">
+                              <div className="flex justify-between items-start">
+                                <span className="text-[10px] uppercase tracking-widest bg-[#4A5D4E] text-white px-2.5 py-1 font-bold rounded">
+                                  {translate("Cozy Wellness")}
+                                </span>
+                                <div className={`w-5 h-5 border rounded-full flex items-center justify-center ${
+                                  selectedPresetPackage === "wellness" ? "bg-[#4A5D4E] border-[#4A5D4E]" : "border-[#A68B67]"
+                                }`}>
+                                  {selectedPresetPackage === "wellness" && <Check className="w-3 h-3 text-white" />}
+                                </div>
+                              </div>
+                              <h5 className="text-base font-serif font-bold text-[#1C1814]">{translate("Restorative Ritual")}</h5>
+                              <p className="text-xs text-gray-555">
+                                {translate("Handpicked sensory essentials designed for deep physiological rest and mindfulness.")}
+                              </p>
+                            </div>
+                            <div className="w-full md:w-64 text-xs space-y-1 text-[#4A5D4E] font-medium border-t md:border-t-0 md:border-l border-[#F0EDEA] pt-3 md:pt-0 md:pl-5 shrink-0">
+                              <span className="text-[10px] uppercase tracking-widest text-gray-400 font-extrabold block mb-1.5">{translate("Curated Items Included:")}</span>
+                              <div>• {translate("Cloud-knit Lavender Fleece Throw")}</div>
+                              <div>• {translate("Imperial Jade Sandstone Fragrance Diffuser")}</div>
+                              <div>• {translate("Waffle-Weave Turkish Cotton Robe")}</div>
+                              <div>• {translate("Aura Artisanal Chocolate Truffles")}</div>
+                            </div>
+                          </div>
+                        </ScrollStackItem>
+
+                        {/* Package C */}
+                        <ScrollStackItem>
+                          <div
+                            onClick={() => {
+                              const items = ["retro-keyboard", "leather-journal", "wooden-charger", "ambient-eye-mask"];
+                              setNewRegistryItems(items);
+                              setSelectedPresetPackage("tech");
+                              triggerAlert("Selected: Artisanal Tech & Journal Package!", "success");
+                            }}
+                            className={`p-6 border-2 cursor-pointer rounded-2xl transition-all relative flex flex-col md:flex-row gap-6 items-start md:items-center ${
+                              selectedPresetPackage === "tech" 
+                                ? "bg-[#4A5D4E]/10 border-[#4A5D4E] shadow-sm ring-1 ring-[#4A5D4E]" 
+                                : "bg-white border-[#E2D8C2] hover:bg-[#FAF9F6] hover:border-[#A68B67]"
+                            }`}
+                          >
+                            <div className="flex-1 space-y-2">
+                              <div className="flex justify-between items-start">
+                                <span className="text-[10px] uppercase tracking-widest bg-amber-800 text-white px-2.5 py-1 font-bold rounded">
+                                  {translate("Artisanal Tech")}
+                                </span>
+                                <div className={`w-5 h-5 border rounded-full flex items-center justify-center ${
+                                  selectedPresetPackage === "tech" ? "bg-[#4A5D4E] border-[#4A5D4E]" : "border-[#A68B67]"
+                                }`}>
+                                  {selectedPresetPackage === "tech" && <Check className="w-3 h-3 text-white" />}
+                                </div>
+                              </div>
+                              <h5 className="text-base font-serif font-bold text-[#1C1814]">{translate("Creative Professional")}</h5>
+                              <p className="text-xs text-gray-555">
+                                {translate("Exquisite wooden and mechanical lifestyle utilities built for high-performing minds.")}
+                              </p>
+                            </div>
+                            <div className="w-full md:w-64 text-xs space-y-1 text-[#4A5D4E] font-medium border-t md:border-t-0 md:border-l border-[#F0EDEA] pt-3 md:pt-0 md:pl-5 shrink-0">
+                              <span className="text-[10px] uppercase tracking-widest text-gray-400 font-extrabold block mb-1.5">{translate("Curated Items Included:")}</span>
+                              <div>• {translate("Classic Oak Wood Mechanical Keyboard")}</div>
+                              <div>• {translate("Emperor Tan Leather Journal Set")}</div>
+                              <div>• {translate("Forest Walnut Wooden Wireless Charger")}</div>
+                              <div>• {translate("Aura Smart Sound-Cancelling Relaxation Mask")}</div>
+                            </div>
+                          </div>
+                        </ScrollStackItem>
+                      </ScrollStack>
+                    </div>
                   </div>
 
-                  <div className="bg-[#FAF9F6] border border-[#E2D8C2]/60 p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                    <span className="text-[10px] text-gray-500 font-medium">{translate("Looking to browse outside of this selected package? Toggle additional catalog items into your wishlist:")}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Merge all items or allow toggle
-                        triggerAlert("All general items unlocked. Check additional options across the full list!", "info");
-                        setNewRegistryOccasion("General Gathering"); // unlocks everything
-                      }}
-                      className="px-4 py-1.5 bg-white border border-[#E5E2DE] text-[#4A5D4E] hover:bg-gray-100 hover:border-[#4A5D4E] text-[9px] uppercase tracking-widest font-bold self-start transition-colors cursor-pointer block"
-                    >
-                      {translate("Show Full Catalog List")}
-                    </button>
+                  {/* Part 2: Introduce categories with structured filters */}
+                  <div className="space-y-6">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#E2D8C2]/40 pb-3 gap-3 text-left">
+                      <div>
+                        <h4 className="text-[11px] uppercase tracking-[0.2em] font-bold text-[#4A5D4E]">
+                          {translate("Step 2: Customize Goods list by Category")}
+                        </h4>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {translate("Browse through our categories and check or uncheck individual items to refine your list.")}
+                        </p>
+                      </div>
+                      <span className="text-xs text-[#4A5D4E] font-bold uppercase tracking-widest bg-[#4A5D4E]/5 px-3 py-1 border border-[#4A5D4E]/15 rounded-md shrink-0">
+                        {translate("Total Items Selected:")} {newRegistryItems.length}
+                      </span>
+                    </div>
+
+                    {/* Exquisite Categories Tab Selectors */}
+                    <div className="flex flex-wrap gap-2 pb-2">
+                      {["All", "Gourmet & Sweets", "Wellness & Comfort", "Tech & Gadgets", "Home & Decor", "Creative & Lifestyle"].map((cat) => {
+                        const isCatActive = activeFormCategory === cat;
+                        return (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => setActiveFormCategory(cat)}
+                            className={`px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all rounded-lg cursor-pointer border ${
+                              isCatActive
+                                ? "bg-[#4A5D4E] text-white border-[#4A5D4E]"
+                                : "bg-white text-gray-600 border-[#E2D8C2] hover:bg-gray-100"
+                            }`}
+                          >
+                            {translate(cat === "All" ? "All Categories" : cat)}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Render Filtered Products list utilizing a high-end responsive grid with premium motion effects */}
+                    <div className="w-full">
+                      {(() => {
+                        let filteredProducts = CATALOG;
+                        if (activeFormCategory !== "All") {
+                          filteredProducts = CATALOG.filter(p => p.category === activeFormCategory);
+                        }
+
+                        return (
+                          <div className="relative group/carousel w-full">
+                            {/* Left Scroll Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleRegistryCarouselScroll("left")}
+                              className="absolute -left-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white border border-[#E2D8C2] text-[#4A5D4E] hover:bg-[#4A5D4E] hover:text-white flex items-center justify-center shadow-md transition-all duration-300 opacity-100 sm:opacity-0 group-hover/carousel:opacity-100 focus:opacity-100 cursor-pointer"
+                              aria-label="Scroll Left"
+                            >
+                              <ChevronLeft className="w-5 h-5" />
+                            </button>
+                            
+                            {/* Right Scroll Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleRegistryCarouselScroll("right")}
+                              className="absolute -right-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white border border-[#E2D8C2] text-[#4A5D4E] hover:bg-[#4A5D4E] hover:text-white flex items-center justify-center shadow-md transition-all duration-300 opacity-100 sm:opacity-0 group-hover/carousel:opacity-100 focus:opacity-100 cursor-pointer"
+                              aria-label="Scroll Right"
+                            >
+                              <ChevronRight className="w-5 h-5" />
+                            </button>
+
+                            <motion.div 
+                              ref={registryCarouselRef}
+                              layout
+                              className="w-full overflow-x-auto flex gap-5 py-4 px-1 snap-x snap-mandatory scroll-smooth [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-[#FAF7F1] [&::-webkit-scrollbar-thumb]:bg-[#E2D8C2] [&::-webkit-scrollbar-thumb]:rounded-full"
+                            >
+                              <AnimatePresence mode="popLayout">
+                                {filteredProducts.map((prod, idx) => {
+                                  const isChecked = newRegistryItems.includes(prod.id);
+                                  return (
+                                    <motion.div
+                                      key={prod.id}
+                                      layout
+                                      initial={{ opacity: 0, y: 12 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      exit={{ opacity: 0, scale: 0.96 }}
+                                      transition={{ duration: 0.3, ease: "easeOut" }}
+                                      whileHover={{ y: -4 }}
+                                      onClick={() => {
+                                        toggleProductForNewRegistry(prod.id);
+                                        setSelectedPresetPackage(null); // customized manually
+                                      }}
+                                      className={`relative p-5 border-2 rounded-2xl flex flex-col justify-between cursor-pointer select-none overflow-hidden transition-all duration-300 w-[285px] sm:w-[320px] shrink-0 snap-start ${
+                                        isChecked
+                                          ? "bg-[#4A5D4E]/10 border-[#4A5D4E] shadow-sm ring-1 ring-[#4A5D4E]/20"
+                                          : "bg-[#FDFCFB]/90 border-[#E2D8C2] hover:border-[#A68B67] hover:bg-white hover:shadow-md"
+                                      }`}
+                                    >
+                                      {/* Ambient top right glow */}
+                                      {isChecked && (
+                                        <div className="absolute top-0 right-0 w-20 h-20 bg-[#4A5D4E]/10 rounded-full blur-xl -mr-4 -mt-4 pointer-events-none" />
+                                      )}
+
+                                      <div>
+                                        {/* Image Aspect ratio container */}
+                                        <div className="relative mb-3.5 group overflow-hidden rounded-xl bg-[#FAF9F6] border border-[#E2D8C2]/40 aspect-[4/5] flex items-center justify-center">
+                                          <img
+                                            src={prod.image}
+                                            alt={prod.name}
+                                            referrerPolicy="no-referrer"
+                                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                          />
+                                          
+                                          {/* Status Category Badge */}
+                                          <div className="absolute top-2.5 left-2.5 flex gap-1 flex-wrap">
+                                            <span className="bg-[#1C1814]/85 backdrop-blur-xs text-white text-[8px] uppercase tracking-widest font-black px-2 py-0.5 rounded-sm">
+                                              {translate(prod.category)}
+                                            </span>
+                                          </div>
+
+                                          {/* Premium checkbox check indicator */}
+                                          <div className="absolute top-2.5 right-2.5">
+                                            <motion.div
+                                              animate={{ scale: isChecked ? 1.1 : 1 }}
+                                              className={`w-6 h-6 rounded-full flex items-center justify-center shadow-xs border transition-colors ${
+                                                isChecked 
+                                                  ? "bg-[#4A5D4E] border-[#4A5D4E] text-white" 
+                                                  : "bg-[#FAF9F6]/90 backdrop-blur-xs border-[#A68B67] text-transparent"
+                                              }`}
+                                            >
+                                              <Check className="w-3.5 h-3.5 stroke-[3px]" />
+                                            </motion.div>
+                                          </div>
+                                        </div>
+
+                                        {/* Product Metadata */}
+                                        <div className="space-y-1 text-left">
+                                          <span className="text-[9px] text-[#A68B67] uppercase tracking-widest font-extrabold block">
+                                            {translate("Premium Preset")} #{idx + 1}
+                                          </span>
+                                          <h5 className="text-[13px] font-bold text-[#1C1814] uppercase tracking-wider line-clamp-1">
+                                            {translate(prod.name)}
+                                          </h5>
+                                          <p className="text-xs text-gray-500 line-clamp-2 leading-relaxed">
+                                            {translate(prod.description)}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {/* Action Bottom Bar */}
+                                      <div className="mt-4 pt-3 border-t border-dashed border-[#E2D8C2]/60 flex items-center justify-between">
+                                        <span className="text-sm font-black text-[#4A5D4E] font-mono">${prod.price.toFixed(2)}</span>
+                                        
+                                        <motion.span 
+                                          animate={{ 
+                                            color: isChecked ? "#4A5D4E" : "#A68B67",
+                                          }}
+                                          className="text-[9px] uppercase tracking-widest font-black flex items-center gap-1.5"
+                                        >
+                                          {isChecked ? (
+                                            <>
+                                              <span className="w-1.5 h-1.5 rounded-full bg-[#4A5D4E] animate-pulse"></span>
+                                              {translate("Selected ✓")}
+                                            </>
+                                          ) : (
+                                            translate("+ Add to list")
+                                          )}
+                                        </motion.span>
+                                      </div>
+
+                                    </motion.div>
+                                  );
+                                })}
+                              </AnimatePresence>
+                            </motion.div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
 
                 {/* Submit button bar */}
-                <div className="flex justify-end gap-3 pt-4 border-t border-[#F0EDEA]">
+                <div className="flex flex-wrap justify-center gap-4 pt-6 border-t border-[#E2D8C2]/60">
                   <button
                     type="button"
                     onClick={() => {
@@ -2015,160 +2371,21 @@ export default function App() {
                       setNewRegistryItems([]);
                       triggerAlert("Cleared all builder form selections", "info");
                     }}
-                    className="px-6 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-[10px] uppercase tracking-widest font-bold transition-colors cursor-pointer"
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs uppercase tracking-widest font-bold transition-all cursor-pointer rounded-lg"
                   >
                     {translate("Cancel / Clear Selected")}
                   </button>
                   <button
                     type="submit"
-                    className="px-8 py-2.5 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors flex items-center gap-1 cursor-pointer"
+                    className="px-8 py-3 bg-[#4A5D4E] text-white text-xs uppercase tracking-widest font-black hover:bg-[#3d4d40] transition-all flex items-center gap-2 cursor-pointer rounded-lg shadow-sm"
                   >
                     <span>{translate("Subscribe to Curated Package")}</span>
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
-              </InteractiveCard>
-
-            {/* List Active Registries */}
-            <div className="space-y-8">
-              <div className="border-b border-[#E2D8C2] pb-2">
-                <span className="text-[10px] uppercase tracking-[0.3em] text-[#A68B67] font-bold block">{translate("Current active Registrant books")}</span>
-                <h3 className="text-xl font-instrument font-normal text-[#1C1814]">{translate("Active Subscribed Packages & Offers")} ({registries.length})</h3>
-              </div>
-              
-              {registries.map(reg => {
-                const totalRequested = reg.items.reduce((s, i) => s + i.quantityRequested, 0);
-                const totalReceived = reg.items.reduce((s, i) => s + i.quantityReceived, 0);
-                const pct = totalRequested > 0 ? Math.round((totalReceived / totalRequested) * 100) : 0;
-
-                return (
-                  <InteractiveCard key={reg.id} className="bg-white border border-[#E2D8C2] p-6 md:p-8 premium-shadow space-y-6" glowColor="74, 93, 78">
-                    
-                    {/* Header info */}
-                    <div className="flex flex-col md:flex-row justify-between items-start gap-4 pb-4 border-b border-[#F0EDEA]">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                          <span className="bg-[#4A5D4E]/10 text-[#4A5D4E] px-2.5 py-0.5 text-[8px] uppercase tracking-widest font-bold border border-[#4A5D4E]/20">
-                            {translate(reg.occasion === "RetirementRest" || reg.occasion === "Retirement Rest" ? "Graduation" : reg.occasion)}
-                          </span>
-                          <span className="text-xs text-[#666] font-mono flex items-center gap-1">
-                            <Calendar className="w-3 h-3" />
-                            {translate("Celebration Date:")} {reg.date}
-                          </span>
-                        </div>
-                        <h3 className="text-xl font-serif text-[#1C1814] font-semibold italic">{reg.name}</h3>
-                        
-                        {/* Display custom registrant name */}
-                        <div className="mt-2 space-y-1">
-                          <p className="text-xs text-gray-750 font-medium">
-                            {translate("Registered by:")} <span className="font-bold text-[#4A5D4E]">{reg.registrantName || translate("Honored Registrant")}</span> 
-                            {reg.email && <span className="text-gray-400 italic ml-1.5">({reg.email})</span>}
-                          </p>
-                          {reg.notes && <p className="text-xs text-gray-500 italic mt-1 font-sans font-medium bg-[#FAF9F6] p-2 border-l-2 border-[#A68B67]">"{reg.notes}"</p>}
-                        </div>
-                      </div>
-
-                      {/* Overall Progress Tracker */}
-                      <div className="w-full md:w-64 bg-[#FAF9F6] p-4 border border-[#E2D8C2] text-center space-y-1 shrink-0">
-                        <div className="flex justify-between text-[10px] uppercase tracking-widest text-[#666] font-bold">
-                          <span>{translate("Progress Meter")}</span>
-                          <span>{pct}% {translate("Fulfilled")}</span>
-                        </div>
-                        
-                        <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
-                          <div 
-                            className="bg-[#4A5D4E] h-2 rounded-full transition-all duration-500" 
-                            style={{ width: `${Math.min(100, pct)}%` }}
-                          />
-                        </div>
-
-                        <span className="text-[9px] text-gray-400 capitalize inline-block font-medium">
-                          {totalReceived} {translate("of")} {totalRequested} {translate("premium presets claimed by loved guests")}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Registry Sub Items Grid */}
-                    <div>
-                      <h4 className="text-[10px] uppercase tracking-widest font-bold text-gray-400 mb-4 block">{translate("Wishlisted Goods Selection List")}</h4>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                        {reg.items.map(rItem => {
-                          const product = CATALOG.find(p => p.id === rItem.productId);
-                          if (!product) return null;
-                          const isFulfilled = rItem.quantityReceived >= rItem.quantityRequested;
-
-                          return (
-                            <div key={product.id} className="border border-[#F0EDEA] p-3 flex flex-col justify-between bg-[#FDFCFB] text-xs">
-                              
-                              <div className="flex gap-2 items-center mb-2.5">
-                                <img src={product.image} alt={product.name} referrerPolicy="no-referrer" className="w-10 h-12 object-cover rounded-sm" />
-                                <div className="min-w-0 flex-1">
-                                  <h5 className="font-semibold text-[11px] truncate uppercase">{translate(product.name)}</h5>
-                                  <span className="text-[#A68B67]">${product.price.toFixed(2)}</span>
-                                </div>
-                              </div>
-
-                              <div className="space-y-3 pt-3 border-t border-[#F5F2EE]">
-                                <div className="flex justify-between text-[10px] text-gray-500 font-semibold uppercase">
-                                  <span>{translate("Gifting State:")}</span>
-                                  <span>{rItem.quantityReceived} {translate("of")} {rItem.quantityRequested}</span>
-                                </div>
-
-                                {isFulfilled ? (
-                                  <div className="w-full py-1.5 bg-[#4A5D4E]/10 border border-[#4A5D4E]/20 text-[#4A5D4E] text-center text-[9px] uppercase tracking-wider font-bold">
-                                    ✓ {translate("Fully Claimed & Gifted")}
-                                  </div>
-                                ) : (
-                                  <div className="flex gap-1.5">
-                                    <button
-                                      onClick={() => contributeToRegistryItem(reg.id, product.id)}
-                                      className="flex-1 py-2 bg-[#FAF9F6] border border-[#E2D8C2] hover:bg-[#EAE7E2] text-[9px] uppercase tracking-widest text-[#1A1A1A] font-bold cursor-pointer transition-colors"
-                                    >
-                                      {translate("Claim Presets")}
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Registry Actions footer */}
-                    <div className="flex justify-between items-center text-[10px] tracking-widest text-gray-400 capitalize">
-                      <span>{translate("Unique sheet block:")} reg-{reg.id}</span>
-                      <button 
-                        onClick={async () => {
-                          let origin = "https://presentperfect.co";
-                          try {
-                            if (typeof window !== "undefined" && window.location && window.location.origin) {
-                              origin = window.location.origin;
-                            }
-                          } catch (err) {
-                            // ignore sandbox restriction
-                          }
-                          const dummyUrl = `${origin}/registry-preview?id=${reg.id}`;
-                          const ok = await copyToClipboard(dummyUrl);
-                          if (ok) {
-                            triggerAlert("Sharable guest list portfolio link copied to clipboard!", "success");
-                          } else {
-                            triggerAlert("Unlocking url copied to clipboard blocked. Links: " + dummyUrl, "info");
-                          }
-                        }}
-                        className="text-[#4A5D4E] font-bold hover:underline flex items-center gap-1 cursor-pointer uppercase"
-                      >
-                        <Share2 className="w-3.5 h-3.5 text-[#A68B67]" />
-                        {translate("Share Sheet Portfolio")}
-                      </button>
-                    </div>
-
-                  </InteractiveCard>
-                );
-              })}
-            </div>
+              </form>
+              )}
+            </div> {/* Close centered wrapper */}
 
           </div>
         )}
@@ -3191,12 +3408,12 @@ export default function App() {
 
         {/* QUESTIONS & Bespoke INQUIRIES TAB */}
         {activeTab === "inquiry" && (
-          <div id="inquiry-tab-content" className="max-w-[1300px] mx-auto px-6 sm:px-12 md:px-16 py-12 space-y-12 animate-fade-in text-[#1C1814]">
+          <div id="inquiry-tab-content" className="max-w-[1700px] mx-auto px-6 sm:px-12 md:px-16 py-12 space-y-12 animate-fade-in text-[#1C1814]">
             
             {/* Header section rephrasing the meaning of the website in general */}
             <div className="text-center max-w-2xl mx-auto space-y-4">
               <span className="text-[10px] uppercase tracking-[0.4em] text-[#A68B67] font-bold block">
-                传统咨询 / Heritage Correspondence
+                Heritage Correspondence
               </span>
               <h2 className="text-3xl md:text-5xl font-serif font-bold italic text-[#4A5D4E]">
                 Bespoke Correspondence
@@ -3207,41 +3424,81 @@ export default function App() {
               </p>
             </div>
 
-            <div className="max-w-3xl mx-auto">
+            <div className="max-w-5xl mx-auto w-full">
               
-              {/* Inquiry Form: Centered & Cinematic */}
-              <div className="bg-[#FAF7F1] border border-[#E2D8C2] p-8 sm:p-12 space-y-8 relative overflow-hidden rounded shadow-sm">
-                {/* Visual traditional decoration lines */}
-                <div className="absolute top-0 left-0 w-2 h-full bg-[#4A5D4E]" />
-                <div className="absolute top-0 right-0 w-2 h-full bg-[#4A5D4E]/30" />
+              {/* Inquiry Form: Centered & Professional */}
+              <div className="bg-[#FAF7F1] border border-[#E2D8C2] p-6 sm:p-10 space-y-6 rounded shadow-sm">
                 
-                {/* Supabase connection status indicator badge */}
-                <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-[#E2D8C2] p-3 rounded text-[10px] tracking-widest uppercase font-bold text-gray-700">
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4A5D4E] opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4A5D4E]"></span>
-                    </div>
-                    <span>{translate("Supabase Storage Pipeline")}</span>
-                  </div>
-                  <span className="text-[#4A5D4E] font-extrabold">{translate("SECURE & ACTIVE CONNECTED")}</span>
-                </div>
-
                 {inquirySuccess ? (
                   <div className="space-y-6 py-6 text-center animate-fade-in">
                     <div className="w-16 h-16 border-2 border-dashed border-[#4A5D4E] bg-[#4A5D4E]/5 rounded-full flex items-center justify-center mx-auto text-[#4A5D4E]">
                       <Check className="w-8 h-8 animate-pulse" />
                     </div>
+                    
                     <div className="space-y-2">
                       <span className="text-xs uppercase tracking-widest text-[#A68B67] font-bold block">
-                        咨询登记成功 / Inscribed in Parlor Ledgers
+                        Inscribed in Parlor Ledgers
                       </span>
-                      <h3 className="text-2xl font-serif italic text-[#1C1814] font-bold">
+                      <h3 className="text-2xl font-serif text-[#1C1814] font-bold leading-tight">
                         Correspondence Registered
                       </h3>
                       <p className="text-xs text-gray-600 leading-relaxed max-w-md mx-auto">
-                        Your bespoke question has been written using natural charcoal mulberry ink and stamped with traditional red wax lacquer. Master Lin's preservation team will study your request. A formal response will be dispatched to your email address within one solar cycle.
+                        We have received your inquiry. Our curators will review your details and respond to your email address as soon as possible.
                       </p>
+                    </div>
+
+                    {/* Highly elegant and stylish summary box including user inputs */}
+                    <div className="max-w-xl mx-auto bg-white border border-[#E2D8C2]/80 rounded-lg p-8 text-left space-y-6 shadow-sm relative overflow-hidden">
+                      {/* Elegant corner decorative borders */}
+                      <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-[#A68B67]" />
+                      <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-[#A68B67]" />
+                      <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-[#A68B67]" />
+                      <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-[#A68B67]" />
+
+                      <div className="text-center pb-4 border-b border-[#FAF7F1]">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-[#A68B67] font-bold block mb-1">
+                          Official Receipt
+                        </span>
+                        <h4 className="font-serif italic text-base text-[#1C1814]">Bespoke Inquiry Summary</h4>
+                      </div>
+
+                      <div className="space-y-4 text-xs text-[#1C1814]">
+                        <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-gray-100">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold">Inquirer Name</span>
+                          <span className="col-span-2 font-sans font-medium text-gray-800">{inquiryName}</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-gray-100">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold">Email Address</span>
+                          <span className="col-span-2 font-mono text-gray-700">{inquiryEmail}</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-gray-100">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold">Selected Specialty</span>
+                          <span className="col-span-2 font-sans font-medium text-gray-800">{inquirySpecialty}</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-gray-100">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold">Callback Preference</span>
+                          <span className="col-span-2 font-sans text-gray-700">
+                            {inquiryCallback ? "Yes, request personal callback/audio transmission" : "No written callback requested"}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 py-1.5 border-b border-gray-100">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold">Sealing Method</span>
+                          <span className="col-span-2 font-sans text-gray-700">
+                            {inquirySealEnvelope ? "Traditional wax-stamped cedar leaf parchment" : "Standard envelope"}
+                          </span>
+                        </div>
+
+                        <div className="pt-2 space-y-1.5">
+                          <span className="text-gray-500 uppercase tracking-wider text-[9px] font-bold block">Inquiry Message</span>
+                          <div className="bg-[#FAF8F5] border border-[#F0EDEA] p-4 rounded text-xs leading-relaxed italic text-gray-700 font-sans whitespace-pre-wrap">
+                            "{inquiryMessage}"
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     <div className="pt-4 flex flex-wrap gap-4 justify-center">
@@ -3253,14 +3510,15 @@ export default function App() {
                           setInquiryMessage("");
                           setInquiryCallback(false);
                           setInquirySealEnvelope(true);
+                          setSupabaseInquiryResult(null);
                         }}
-                        className="px-6 py-2.5 bg-white border border-[#E2D8C2] text-gray-700 text-[10px] uppercase tracking-widest font-bold hover:bg-[#EAE7E2] transition-all rounded"
+                        className="px-6 py-2.5 bg-white border border-[#E2D8C2] text-gray-700 text-[10px] uppercase tracking-widest font-bold hover:bg-[#EAE7E2] transition-all rounded cursor-pointer"
                       >
                         Submit Another Request
                       </button>
                       <button 
                         onClick={() => setActiveTab("shop")}
-                        className="px-6 py-2.5 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors rounded"
+                        className="px-6 py-2.5 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors rounded cursor-pointer"
                       >
                         Return to Catalog
                       </button>
@@ -3268,19 +3526,34 @@ export default function App() {
                   </div>
                 ) : (
                   <form onSubmit={handleInquirySubmit} className="space-y-6">
-                    <div className="border-b border-[#E2D8C2]/60 pb-4">
-                      <h3 className="text-2xl font-serif italic text-[#1C1814] flex items-center gap-2 font-bold justify-center">
+                    <div className="border-b border-[#E2D8C2]/60 pb-5 text-center relative">
+                      {/* Connection status badge for developer feedback */}
+                      <div className="absolute top-0 right-0 flex items-center gap-1.5 bg-white border border-[#E2D8C2]/85 px-3 py-1 rounded-full shadow-xs">
+                        {isSupabaseConfigured() ? (
+                          <>
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#4A5D4E] animate-pulse"></span>
+                            <span className="text-[9px] text-[#4A5D4E] font-black uppercase tracking-wider">Supabase Live</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                            <span className="text-[9px] text-amber-600 font-black uppercase tracking-wider">Offline State</span>
+                          </>
+                        )}
+                      </div>
+
+                      <h3 className="text-2xl font-serif text-[#1C1814] flex items-center gap-2 font-bold justify-center leading-tight pt-2">
                         <Mail className="w-6 h-6 text-[#4A5D4E]" />
                         Write to our Archivists
                       </h3>
-                      <p className="text-center text-xs text-gray-500 leading-relaxed max-w-md mx-auto mt-2">
+                      <p className="text-xs text-gray-500 leading-relaxed max-w-md mx-auto mt-2">
                         Every letter is read with deep presence by humans, never automated bots. Fields are checked for offline ink compatibility and securely synchronized to the database.
                       </p>
                     </div>
 
                     <div className="space-y-5">
                       {/* Grid for Name & Email to organize and fit beautifully */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
                         <div>
                           <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-name">
                             Full Name / Designation
@@ -3289,10 +3562,11 @@ export default function App() {
                             id="inq-name"
                             type="text"
                             required
+                            disabled={isInquirySubmitting}
                             value={inquiryName}
                             onChange={(e) => setInquiryName(e.target.value)}
                             placeholder="Honored Recipient"
-                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner"
+                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner disabled:bg-gray-50 disabled:text-gray-400"
                           />
                         </div>
 
@@ -3304,23 +3578,25 @@ export default function App() {
                             id="inq-email"
                             type="email"
                             required
+                            disabled={isInquirySubmitting}
                             value={inquiryEmail}
                             onChange={(e) => setInquiryEmail(e.target.value)}
                             placeholder="name@destination.com"
-                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner"
+                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner disabled:bg-gray-50 disabled:text-gray-400"
                           />
                         </div>
                       </div>
 
-                      <div>
+                      <div className="text-left">
                         <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-specialty">
                           Inquired Traditional Specialty
                         </label>
                         <select 
                           id="inq-specialty"
+                          disabled={isInquirySubmitting}
                           value={inquirySpecialty}
                           onChange={(e) => setInquirySpecialty(e.target.value)}
-                          className="w-full bg-white border border-[#E2D8C2] h-11 px-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded cursor-pointer shadow-inner"
+                          className="w-full bg-white border border-[#E2D8C2] h-11 px-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded cursor-pointer shadow-inner disabled:bg-gray-50 disabled:text-gray-400"
                         >
                           <option value="Hand-Carved Red Sandalwood Chests">Hand-Carved Red Sandalwood Chests</option>
                           <option value="Celadon Jade Imperial Tea Sets">Celadon Jade Imperial Tea Sets</option>
@@ -3331,7 +3607,7 @@ export default function App() {
                         </select>
                       </div>
 
-                      <div>
+                      <div className="text-left">
                         <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-msg">
                           Your Inquiry / Handwritten Note
                         </label>
@@ -3339,23 +3615,25 @@ export default function App() {
                           id="inq-msg"
                           rows={4}
                           required
+                          disabled={isInquirySubmitting}
                           value={inquiryMessage}
                           onChange={(e) => setInquiryMessage(e.target.value)}
                           placeholder="Express your vision or questions in detail. Mention material weights, wax-sealing custom texts, or wood carvings..."
-                          className="w-full bg-white border border-[#E2D8C2] p-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all resize-none rounded shadow-inner"
+                          className="w-full bg-white border border-[#E2D8C2] p-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all resize-none rounded shadow-inner disabled:bg-gray-50 disabled:text-gray-400"
                         />
                       </div>
 
                       {/* Checkboxes layout made clean and elegant */}
-                      <div className="bg-white border border-[#E2D8C2] p-4 rounded space-y-3 shadow-inner">
+                      <div className="bg-white border border-[#E2D8C2] p-4 rounded space-y-3 shadow-inner text-left">
                         <label className="flex items-start gap-3 cursor-pointer select-none">
                           <input 
                             type="checkbox"
+                            disabled={isInquirySubmitting}
                             className="mt-1 h-3.5 w-3.5 accent-[#4A5D4E] cursor-pointer"
                             checked={inquiryCallback}
                             onChange={(e) => setInquiryCallback(e.target.checked)}
                           />
-                          <span className="text-[11px] text-gray-750 leading-relaxed">
+                          <span className="text-[11px] text-gray-700 leading-relaxed">
                             I request a custom callback or personal audio transmission from Mount Mogan's head archivist regarding calligraphic elements.
                           </span>
                         </label>
@@ -3365,11 +3643,12 @@ export default function App() {
                         <label className="flex items-start gap-3 cursor-pointer select-none">
                           <input 
                             type="checkbox"
+                            disabled={isInquirySubmitting}
                             className="mt-1 h-3.5 w-3.5 accent-[#4A5D4E] cursor-pointer"
                             checked={inquirySealEnvelope}
                             onChange={(e) => setInquirySealEnvelope(e.target.checked)}
                           />
-                          <span className="text-[11px] text-gray-750 leading-relaxed">
+                          <span className="text-[11px] text-gray-700 leading-relaxed">
                             Wrap my reply package in traditional, wax-stamped cedar leaf parchment, free of cost.
                           </span>
                         </label>
@@ -3378,39 +3657,24 @@ export default function App() {
 
                     <button 
                       type="submit"
-                      className="w-full h-12 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-[0.25em] font-extrabold hover:bg-[#3d4d40] transition-all duration-300 flex items-center justify-center gap-2 rounded shadow-sm hover:shadow"
+                      disabled={isInquirySubmitting}
+                      className="w-full h-12 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-[0.25em] font-extrabold hover:bg-[#3d4d40] transition-all duration-300 flex items-center justify-center gap-2 rounded shadow-sm hover:shadow disabled:opacity-75 disabled:cursor-not-allowed cursor-pointer"
                     >
-                      <span>Inscribe & Dispatch Inquiry</span>
-                      <ChevronRight className="w-4 h-4" />
+                      {isInquirySubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>Inscribing & Dispatching...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Inscribe & Dispatch Inquiry</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </>
+                      )}
                     </button>
                   </form>
                 )}
               </div>
-
-              {/* Historic Registry & Sent Correspondence List */}
-              {userInquiries.length > 0 && (
-                <div className="mt-12 bg-white border border-[#E2D8C2] p-6 rounded space-y-4 shadow-xs animate-fade-in">
-                  <h4 className="text-[11px] uppercase tracking-[0.25em] font-extrabold text-[#4A5D4E] border-b border-gray-100 pb-2">
-                    {translate("Your Historic Correspondence")} ({userInquiries.length})
-                  </h4>
-                  <div className="space-y-4 divide-y divide-gray-100 max-h-[300px] overflow-y-auto pr-2">
-                    {userInquiries.map((inq: any) => (
-                      <div key={inq.id} className="pt-3 first:pt-0 space-y-1.5 text-left text-xs">
-                        <div className="flex justify-between items-baseline">
-                          <span className="font-bold text-gray-800">{inq.name}</span>
-                          <span className="text-[10px] text-gray-400 font-mono">{inq.date}</span>
-                        </div>
-                        <div className="text-[10px] text-[#A68B67] uppercase tracking-wider font-semibold">
-                          Specialty: {translate(inq.specialty)}
-                        </div>
-                        <p className="text-gray-600 bg-[#FCFAF7] p-2 border border-gray-100 italic rounded">
-                          "{inq.message}"
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
             </div>
           </div>
@@ -3659,48 +3923,18 @@ export default function App() {
                 <div className="space-y-6 text-center animate-fade-in select-none">
                   <div className="space-y-1">
                     <span className="text-[9px] uppercase tracking-[0.25em] text-[#A68B67] font-extrabold">Step 2: Seal of Intention</span>
-                    <h3 className="font-serif italic text-2xl font-bold text-[#4A5D4E]">Your gift is ready.</h3>
-                    <p className="text-xs text-gray-500 font-medium max-w-sm mx-auto">
-                      Gently rub the royal wax seal below with your cursor (or swipe back and forth on mobile) to fuse the natural fibers and finalize your creation.
+                    <h3 className="font-serif italic text-2xl font-bold text-[#4A5D4E]">Sealing Your Creation...</h3>
+                    <p className="text-xs text-gray-500 font-medium max-w-sm mx-auto leading-relaxed">
+                      Please wait a brief moment while our atelier automatically fuses the natural fibers and binds the royal botanical wax seal.
                     </p>
                   </div>
 
                   {/* Interactive Rub Zone */}
                   <div 
-                    className="relative w-48 h-48 mx-auto bg-[#FAF5EB] rounded-full border-4 border-double border-[#A68B67] flex items-center justify-center cursor-move overflow-hidden group shadow-md"
-                    onMouseMove={() => {
-                      if (rubProgress < 100) {
-                        setRubProgress(prev => {
-                          const next = prev + 6.0;
-                          if (next >= 100) {
-                            finalizeCeremonyCuration();
-                            setRubbedSuccessfully(true);
-                            setCeremonyStep("ready");
-                            triggerAlert("Curation seal bound successfully!", "success");
-                            return 100;
-                          }
-                          return next;
-                        });
-                      }
-                    }}
-                    onTouchMove={() => {
-                      if (rubProgress < 100) {
-                        setRubProgress(prev => {
-                          const next = prev + 10.0;
-                          if (next >= 100) {
-                            finalizeCeremonyCuration();
-                            setRubbedSuccessfully(true);
-                            setCeremonyStep("ready");
-                            triggerAlert("Curation seal bound successfully!", "success");
-                            return 100;
-                          }
-                          return next;
-                        });
-                      }
-                    }}
+                    className="relative w-48 h-48 mx-auto bg-[#FAF5EB] rounded-full border-4 border-double border-[#A68B67] flex items-center justify-center cursor-wait overflow-hidden group shadow-md"
                   >
                     {/* The Wax Seal graphic */}
-                    <div className="absolute inset-2 bg-gradient-to-tr from-red-800 to-red-600 rounded-full flex flex-col items-center justify-center text-white shadow-inner select-none transition-transform duration-300 group-hover:scale-105 active:scale-95">
+                    <div className="absolute inset-2 bg-gradient-to-tr from-red-800 to-red-600 rounded-full flex flex-col items-center justify-center text-white shadow-inner select-none transition-transform duration-300 group-hover:scale-105">
                       {/* Stamp design */}
                       <span className="text-4xl">👑</span>
                       <span className="text-[8px] tracking-[0.4em] uppercase font-bold text-yellow-300 mt-1">PRESENT</span>
@@ -3730,20 +3964,8 @@ export default function App() {
                       <div className="bg-gradient-to-r from-[#A68B67] to-[#4A5D4E] h-full transition-all duration-150" style={{ width: `${rubProgress}%` }}></div>
                     </div>
                     <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                      Rub Progress: <span className="font-mono font-black text-[#4A5D4E]">{Math.floor(rubProgress)}%</span>
+                      Binding Progress: <span className="font-mono font-black text-[#4A5D4E]">{Math.floor(rubProgress)}%</span>
                     </p>
-                    <button
-                      onClick={() => {
-                        finalizeCeremonyCuration();
-                        setRubProgress(100);
-                        setRubbedSuccessfully(true);
-                        setCeremonyStep("ready");
-                        triggerAlert("Curation seal bound successfully!", "success");
-                      }}
-                      className="text-[9px] uppercase tracking-widest font-extrabold text-[#A68B67] underline hover:text-[#4A5D4E]"
-                    >
-                      Or skip rubbing gesture to finalize instantly
-                    </button>
                   </div>
                 </div>
               )}
