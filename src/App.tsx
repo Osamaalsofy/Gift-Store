@@ -27,7 +27,11 @@ import {
   ArrowRightCircle,
   Zap,
   LockKeyhole,
-  Fingerprint
+  Fingerprint,
+  Pause,
+  Play,
+  ArrowLeft,
+  ArrowRight
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { CATALOG } from "./data";
@@ -146,18 +150,28 @@ export default function App() {
   }, [lang]);
 
   // Navigation & Tabs
-  const [activeTab, setActiveTab ] = useState<"shop" | "ai-concierge" | "registry" | "journal" | "about" | "shipping" | "carbon" | "inquiry">("shop");
+  const [activeTab, setActiveTab ] = useState<"shop" | "registry" | "journal" | "about" | "shipping" | "carbon" | "inquiry">("shop");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
   
   // Footer scroll-linked cinematic opacity
   const [footerVisibleRatio, setFooterVisibleRatio] = useState<number>(0.25);
   const footerRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const handleManualScroll = (direction: "left" | "right") => {
+    if (scrollRef.current) {
+      const amount = direction === "left" ? -340 : 340;
+      scrollRef.current.scrollBy({ left: amount, behavior: "smooth" });
+    }
+  };
   
   // Catalog states
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortBy, setSortBy] = useState<"price-low" | "price-high" | "rating" | "default">("default");
+  const [marqueeSpeed, setMarqueeSpeed] = useState<number>(40); // speed in seconds
+  const [marqueeDirection, setMarqueeDirection] = useState<"left" | "right">("left");
+  const [marqueeIsPlaying, setMarqueeIsPlaying] = useState<boolean>(true);
   
   // Product Detail Modal
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -483,7 +497,7 @@ export default function App() {
 
     // Supabase Integration
     if (isSupabaseConfigured()) {
-      const saved = await saveInquiryToSupabase({
+      const res = await saveInquiryToSupabase({
         inquiry_id: newInquiry.id,
         name: newInquiry.name,
         email: newInquiry.email,
@@ -493,8 +507,10 @@ export default function App() {
         sealed: newInquiry.sealed,
         date: newInquiry.date
       });
-      if (saved) {
+      if (res.success) {
         triggerAlert("Inquiry saved securely to your Supabase database!", "success");
+      } else {
+        triggerAlert(`Supabase connection error: ${res.error || "Unknown database error"}`, "error");
       }
     }
   };
@@ -558,15 +574,17 @@ export default function App() {
         price: item.product.price,
         quantity: item.quantity
       }));
-      const saved = await saveOrderToSupabase({
+      const res = await saveOrderToSupabase({
         order_id: generatedOrder,
         items: itemsToSave,
         total: cartSnapshot.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
         address: address || "Pre-arranged Pickup",
         notes: notecard
       });
-      if (saved) {
+      if (res.success) {
         triggerAlert("Order logged securely to your Supabase database!", "success");
+      } else {
+        triggerAlert(`Supabase connection error: ${res.error || "Unknown database error"}`, "error");
       }
     }
   };
@@ -612,7 +630,7 @@ export default function App() {
 
     // Supabase Integration
     if (isSupabaseConfigured()) {
-      const saved = await saveRegistryToSupabase({
+      const res = await saveRegistryToSupabase({
         registry_id: newRegistry.id,
         name: newRegistry.name,
         occasion: newRegistry.occasion,
@@ -622,8 +640,10 @@ export default function App() {
         email: newRegistry.email,
         items: newRegistry.items
       });
-      if (saved) {
+      if (res.success) {
         triggerAlert("Registry synchronized to your Supabase cloud database!", "success");
+      } else {
+        triggerAlert(`Supabase connection error: ${res.error || "Unknown database error"}`, "error");
       }
     }
   };
@@ -883,10 +903,10 @@ export default function App() {
               {translate("Shop Catalog")}
             </button>
             <button 
-              onClick={() => setActiveTab("ai-concierge")}
-              className={`hover:text-[#4A5D4E] transition-colors flex items-center gap-1.5 py-1 cursor-pointer whitespace-nowrap ${activeTab === "ai-concierge" ? "text-[#4A5D4E] border-b-2 border-[#4A5D4E] pb-1" : "text-gray-550 font-semibold"}`}
+              onClick={() => setActiveTab("registry")}
+              className={`hover:text-[#4A5D4E] transition-colors py-1 cursor-pointer whitespace-nowrap ${activeTab === "registry" ? "text-[#4A5D4E] border-b-2 border-[#4A5D4E] pb-1" : "text-gray-550 font-semibold"}`}
             >
-              <span>{translate("Personal Curator")}</span>
+              {translate("Bespoke Offers")}
             </button>
           </div>
 
@@ -905,12 +925,6 @@ export default function App() {
 
           {/* Right: Actions, Lang switch, and extra pages */}
           <div className="flex justify-end gap-4 lg:gap-6 text-xs lg:text-[13px] uppercase tracking-[0.2em] font-bold items-center">
-            <button 
-              onClick={() => setActiveTab("registry")}
-              className={`hover:text-[#4A5D4E] transition-colors py-1 cursor-pointer whitespace-nowrap ${activeTab === "registry" ? "text-[#4A5D4E] border-b-2 border-[#4A5D4E] pb-1" : "text-gray-550 font-semibold"}`}
-            >
-              {translate("Bespoke Offers")}
-            </button>
             <button 
               onClick={() => setActiveTab("journal")}
               className={`hover:text-[#4A5D4E] transition-colors py-1 cursor-pointer whitespace-nowrap ${activeTab === "journal" ? "text-[#4A5D4E] border-b-2 border-[#4A5D4E] pb-1" : "text-gray-550 font-semibold"}`}
@@ -946,15 +960,6 @@ export default function App() {
                 )}
               </button>
             </div>
-            
-            <span className="text-[#E2D8C2] inline-block h-5 w-px shrink-0"></span>
-            
-            <button 
-              onClick={() => setActiveTab("inquiry")}
-              className="px-5 py-2 bg-[#FAF7F1] hover:bg-[#F5F2EE] border-2 border-[#4A5D4E] text-[#4A5D4E] hover:text-white hover:bg-[#4A5D4E] transition-colors cursor-pointer text-xs tracking-[0.15em] font-black uppercase whitespace-nowrap shrink-0"
-            >
-              {translate("Inquire")}
-            </button>
           </div>
         </div>
 
@@ -1020,16 +1025,6 @@ export default function App() {
                 className={`py-2 text-left flex items-center justify-between ${activeTab === "shop" ? "text-[#4A5D4E] font-bold" : "text-gray-600"}`}
               >
                 <span>{translate("Shop Curated Catalog")}</span>
-                <ChevronRight className="w-3.5 h-3.5 text-[#A68B67]" />
-              </button>
-
-              <button 
-                onClick={() => { setActiveTab("ai-concierge"); setMobileMenuOpen(false); }}
-                className={`py-2 text-left flex items-center justify-between ${activeTab === "ai-concierge" ? "text-[#4A5D4E] font-bold" : "text-gray-600"}`}
-              >
-                <span className="flex items-center gap-1.5">
-                  {translate("Personal Curator")}
-                </span>
                 <ChevronRight className="w-3.5 h-3.5 text-[#A68B67]" />
               </button>
 
@@ -1376,113 +1371,279 @@ export default function App() {
               </div>
             </div>
 
-            {/* Product Grid */}
-            {sortedProducts.length === 0 ? (
-              <div className="bg-white border border-[#F0EDEA] p-16 text-center text-gray-500">
-                <Gift className="w-12 h-12 text-[#A68B67] mx-auto mb-4 opacity-50" />
-                <p className="text-sm font-serif mb-2">
-                  {translate("No boutique treasures match your filter criteria.")}
-                </p>
-                <p className="text-xs font-sans tracking-wide">
-                  {translate("Try looking for another category or clearing your current text search.")}
-                </p>
-                <button 
-                  onClick={() => { setSelectedCategory("All"); setSearchQuery(""); }}
-                  className="mt-4 px-6 py-2 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest"
-                >
-                  {translate("Reset Settings")}
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-                {sortedProducts.map((p) => (
-                  <div 
-                    key={p.id} 
-                    id={`prod-card-${p.id}`}
-                    className="bg-white border border-[#F0EDEA] flex flex-col justify-between group overflow-hidden premium-shadow cursor-pointer transition-all hover:-translate-y-1"
-                    onClick={() => { setSelectedProduct(p); setModalImageIndex(0); }}
+            {/* Product Grid / Cinematic Infinite Loop */}
+            {(() => {
+              const marqueeProducts = [];
+              if (sortedProducts.length > 0) {
+                // We want to ensure the track has a dense count to look infinite.
+                // 15 total items is a perfect density for wide displays.
+                const repeats = Math.max(3, Math.ceil(15 / sortedProducts.length));
+                for (let i = 0; i < repeats; i++) {
+                  marqueeProducts.push(...sortedProducts);
+                }
+              }
+              
+              return sortedProducts.length === 0 ? (
+                <div className="bg-white border border-[#F0EDEA] p-16 text-center text-gray-500">
+                  <Gift className="w-12 h-12 text-[#A68B67] mx-auto mb-4 opacity-50" />
+                  <p className="text-sm font-serif mb-2">
+                    {translate("No boutique treasures match your filter criteria.")}
+                  </p>
+                  <p className="text-xs font-sans tracking-wide">
+                    {translate("Try looking for another category or clearing your current text search.")}
+                  </p>
+                  <button 
+                    onClick={() => { setSelectedCategory("All"); setSearchQuery(""); }}
+                    className="mt-4 px-6 py-2 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest"
                   >
-                    
-                    {/* Image Area with smooth zoom-in/zoom-out transition effect */}
-                    <div className="aspect-square w-full relative overflow-hidden bg-gray-100 border-b border-[#F0EDEA]">
-                      <img 
-                        src={p.image} 
-                        alt={p.name} 
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover scale-100 group-hover:scale-105 transition-transform duration-1000 ease-out absolute inset-0"
-                      />
-                      
-                      {/* Category Badge & Out Of Stock warning */}
-                      <div className="absolute top-3 left-3 z-[10] flex flex-col gap-1 items-start">
-                        <span className="bg-white/90 backdrop-blur-md px-2.5 py-1 text-[8px] uppercase tracking-widest font-bold text-[#4A5D4E] border border-[#F5F2EE]">
-                          {translate(p.category)}
-                        </span>
-                        {p.stock < 10 && (
-                          <span className="bg-red-800 text-white px-2 py-0.5 text-[7px] uppercase tracking-[0.15em] font-bold font-sans">
-                            {translate("Only {count} Left").replace("{count}", p.stock.toString())}
-                          </span>
+                    {translate("Reset Settings")}
+                  </button>
+                </div>
+              ) : (
+                <div className="w-full">
+                  {/* Cinematic Filmstrip Style Block */}
+                  <style dangerouslySetInnerHTML={{__html: `
+                    @keyframes cinematicMarquee {
+                      0% { transform: translate3d(0, 0, 0); }
+                      100% { transform: translate3d(-33.3333%, 0, 0); }
+                    }
+                    .animate-marquee-cinematic {
+                      animation: cinematicMarquee var(--marquee-speed, 40s) linear infinite;
+                    }
+                    .animate-marquee-cinematic-reverse {
+                      animation: cinematicMarquee var(--marquee-speed, 40s) linear infinite reverse;
+                    }
+                    .custom-scrollbar-hidden::-webkit-scrollbar {
+                      display: none;
+                    }
+                    .custom-scrollbar-hidden {
+                      -ms-overflow-style: none;
+                      scrollbar-width: none;
+                    }
+                  `}} />
+
+                  {/* Projector Deck Controls (HUD) */}
+                  <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mt-2 mb-8 bg-[#FAF9F6] p-4 border border-[#E2D8C2] rounded-xs">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-2.5 w-2.5 relative">
+                        {marqueeIsPlaying && (
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4A5D4E] opacity-75"></span>
                         )}
-                      </div>
-
-                      {/* Overly interactive drawer action buttons */}
-                      <div className="absolute bottom-4 inset-x-4 translate-y-12 group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10 flex gap-1.5">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            addToCart(p, 1);
-                          }}
-                          className="flex-1 bg-[#4A5D4E] hover:bg-[#3d4d40] text-white text-[9px] uppercase tracking-widest py-2.5 transition-colors font-semibold flex items-center justify-center gap-1"
-                        >
-                          <ShoppingBag className="w-3 h-3" />
-                          {translate("Add to Registry")}
-                        </button>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            // Quick view details
-                            setSelectedProduct(p);
-                            setModalImageIndex(0);
-                          }}
-                          className="bg-white text-[#1A1A1A] border border-[#E5E2DE] py-2.5 px-3 hover:bg-[#F5F2EE]"
-                        >
-                          <Info className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Metadata detail below image */}
-                    <div className="p-5 flex-1 flex flex-col justify-between">
+                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${marqueeIsPlaying ? "bg-[#4A5D4E]" : "bg-gray-400"}`}></span>
+                      </span>
                       <div>
-                        {/* Rating stars */}
-                        <div className="flex items-center gap-1 mb-1.5">
-                          <div className="flex text-amber-500">
-                            {"★".repeat(Math.round(p.rating))}
-                            {"☆".repeat(5 - Math.round(p.rating))}
-                          </div>
-                          <span className="text-[10px] text-gray-400 font-sans">({p.reviewCount})</span>
-                        </div>
-
-                        <h3 className="text-xs uppercase tracking-wider font-semibold text-[#1F1E1C] group-hover:text-[#4A5D4E] transition-colors mb-1.5">
-                          {translate(p.name)}
-                        </h3>
-
-                        <p className="text-xs text-[#666] line-clamp-2 leading-relaxed mb-4">
-                          {translate(p.description)}
+                        <h4 className="text-[10px] uppercase tracking-widest font-bold text-[#1C1814] font-sans">
+                          {translate("Mogan Filmstrip Exhibition")}
+                        </h4>
+                        <p className="text-[9px] text-gray-400 font-sans tracking-wide">
+                          {marqueeIsPlaying ? translate("Continuous cinema track running") : translate("Manual slider active (drag or press arrows)")}
                         </p>
                       </div>
-
-                      <div className="flex justify-between items-baseline pt-4 border-t border-[#F5F2EE]">
-                        <span className="text-[9px] tracking-[0.2em] uppercase text-gray-400 font-sans">
-                          {translate("Price")}
-                        </span>
-                        <span className="text-sm font-semibold text-[#1A1A1A]">${p.price.toFixed(2)}</span>
-                      </div>
                     </div>
 
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {/* Play / Pause Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => setMarqueeIsPlaying(!marqueeIsPlaying)}
+                        className="flex items-center gap-2 px-3 py-1.5 text-[9px] uppercase tracking-widest font-bold bg-white border border-[#E2D8C2] hover:bg-[#FAF9F6] text-gray-700 transition-all rounded-xs shadow-xs"
+                      >
+                        {marqueeIsPlaying ? (
+                          <>
+                            <Pause className="w-3 h-3 text-[#4A5D4E]" />
+                            {translate("Pause Cinematic Loop")}
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3 text-[#4A5D4E]" />
+                            {translate("Exhibition Mode")}
+                          </>
+                        )}
+                      </button>
+
+                      {/* Left/Right manual arrows */}
+                      <div className="flex items-center gap-1 bg-white border border-[#E2D8C2] p-0.5 rounded-xs shadow-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMarqueeIsPlaying(false);
+                            handleManualScroll("left");
+                          }}
+                          className="p-1.5 text-gray-500 hover:text-black hover:bg-gray-100 rounded-xs transition-all"
+                          title={translate("Slide Left")}
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="text-[8px] uppercase tracking-widest text-gray-400 px-2 font-bold select-none">
+                          {translate("Browse")}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMarqueeIsPlaying(false);
+                            handleManualScroll("right");
+                          }}
+                          className="p-1.5 text-gray-500 hover:text-black hover:bg-gray-100 rounded-xs transition-all"
+                          title={translate("Slide Right")}
+                        >
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Direction switcher (only when playing) */}
+                      {marqueeIsPlaying && (
+                        <button
+                          type="button"
+                          onClick={() => setMarqueeDirection(marqueeDirection === "left" ? "right" : "left")}
+                          className="px-3 py-1.5 text-[9px] uppercase tracking-widest bg-white border border-[#E2D8C2] hover:bg-[#FAF9F6] text-gray-700 font-bold rounded-xs flex items-center gap-1 shadow-xs"
+                        >
+                          {marqueeDirection === "left" ? "← Leftward" : "Rightward →"}
+                        </button>
+                      )}
+
+                      {/* Tempo speed selections */}
+                      {marqueeIsPlaying && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] uppercase tracking-widest text-gray-400 font-bold">{translate("Tempo:")}</span>
+                          <div className="flex gap-1 bg-[#F5F2EE] p-0.5 border border-[#E2D8C2] rounded-xs shadow-inner">
+                            {[
+                              { label: "Slow", speed: 65 },
+                              { label: "Medium", speed: 40 },
+                              { label: "Fast", speed: 20 },
+                            ].map((opt) => (
+                              <button
+                                key={opt.speed}
+                                type="button"
+                                onClick={() => setMarqueeSpeed(opt.speed)}
+                                className={`px-2.5 py-0.5 text-[8px] uppercase tracking-widest font-bold transition-all rounded-xs ${
+                                  marqueeSpeed === opt.speed
+                                    ? "bg-[#4A5D4E] text-white shadow-xs"
+                                    : "text-gray-500 hover:text-[#1A1A1A]"
+                                }`}
+                              >
+                                {translate(opt.label)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
+
+                  {/* Infinite Loop Scroller Viewport */}
+                  <div className="relative w-full overflow-hidden py-8 select-none -mx-4 px-4 sm:-mx-8 sm:px-8">
+                    {/* Cinematic Vignette Gradients */}
+                    <div className="absolute left-0 top-0 bottom-0 w-20 sm:w-36 bg-gradient-to-r from-[#FAF9F6] via-[#FAF9F6]/50 to-transparent z-[11] pointer-events-none" />
+                    <div className="absolute right-0 top-0 bottom-0 w-20 sm:w-36 bg-gradient-to-l from-[#FAF9F6] via-[#FAF9F6]/50 to-transparent z-[11] pointer-events-none" />
+
+                    {/* Viewport tracking layer */}
+                    <div 
+                      ref={scrollRef}
+                      className="w-full overflow-x-auto custom-scrollbar-hidden scroll-smooth cursor-grab active:cursor-grabbing py-2"
+                    >
+                      <div 
+                        className={`flex gap-8 w-max ${
+                          marqueeIsPlaying 
+                            ? marqueeDirection === "left" 
+                              ? "animate-marquee-cinematic hover:[animation-play-state:paused]" 
+                              : "animate-marquee-cinematic-reverse hover:[animation-play-state:paused]"
+                            : ""
+                        }`}
+                        style={{
+                          "--marquee-speed": `${marqueeSpeed}s`,
+                        } as React.CSSProperties}
+                      >
+                        {(marqueeIsPlaying ? marqueeProducts : sortedProducts).map((p, idx) => (
+                          <div 
+                            key={`${p.id}-marquee-${idx}`} 
+                            id={`prod-card-${p.id}`}
+                            className="w-[280px] sm:w-[320px] bg-white border border-[#F0EDEA] flex flex-col justify-between group overflow-hidden premium-shadow cursor-pointer transition-all duration-500 hover:-translate-y-2 hover:shadow-2xl hover:border-[#4A5D4E]/30 shrink-0"
+                            onClick={() => { setSelectedProduct(p); setModalImageIndex(0); }}
+                          >
+                            
+                            {/* Image Area with smooth zoom-in/zoom-out transition effect */}
+                            <div className="aspect-square w-full relative overflow-hidden bg-gray-100 border-b border-[#F0EDEA]">
+                              <img 
+                                src={p.image} 
+                                alt={p.name} 
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover scale-100 group-hover:scale-105 transition-transform duration-1000 ease-out absolute inset-0"
+                              />
+                              
+                              {/* Category Badge & Out Of Stock warning */}
+                              <div className="absolute top-3 left-3 z-[10] flex flex-col gap-1 items-start">
+                                <span className="bg-white/90 backdrop-blur-md px-2.5 py-1 text-[8px] uppercase tracking-widest font-bold text-[#4A5D4E] border border-[#F5F2EE]">
+                                  {translate(p.category)}
+                                </span>
+                                {p.stock < 10 && (
+                                  <span className="bg-red-800 text-white px-2 py-0.5 text-[7px] uppercase tracking-[0.15em] font-bold font-sans">
+                                    {translate("Only {count} Left").replace("{count}", p.stock.toString())}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Overly interactive drawer action buttons */}
+                              <div className="absolute bottom-4 inset-x-4 translate-y-12 group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10 flex gap-1.5">
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    addToCart(p, 1);
+                                  }}
+                                  className="flex-1 bg-[#4A5D4E] hover:bg-[#3d4d40] text-white text-[9px] uppercase tracking-widest py-2.5 transition-colors font-semibold flex items-center justify-center gap-1"
+                                >
+                                  <ShoppingBag className="w-3 h-3" />
+                                  {translate("Add to Registry")}
+                                </button>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedProduct(p);
+                                    setModalImageIndex(0);
+                                  }}
+                                  className="bg-white text-[#1A1A1A] border border-[#E5E2DE] py-2.5 px-3 hover:bg-[#F5F2EE]"
+                                >
+                                  <Info className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Metadata detail below image */}
+                            <div className="p-5 flex-1 flex flex-col justify-between">
+                              <div>
+                                {/* Rating stars */}
+                                <div className="flex items-center gap-1 mb-1.5">
+                                  <div className="flex text-amber-500">
+                                    {"★".repeat(Math.round(p.rating))}
+                                    {"☆".repeat(5 - Math.round(p.rating))}
+                                  </div>
+                                  <span className="text-[10px] text-gray-400 font-sans">( {p.reviewCount} )</span>
+                                </div>
+
+                                <h3 className="text-xs uppercase tracking-wider font-semibold text-[#1F1E1C] group-hover:text-[#4A5D4E] transition-colors mb-1.5">
+                                  {translate(p.name)}
+                                </h3>
+
+                                <p className="text-xs text-[#666] line-clamp-2 leading-relaxed mb-4">
+                                  {translate(p.description)}
+                                </p>
+                              </div>
+
+                              <div className="flex justify-between items-baseline pt-4 border-t border-[#F5F2EE]">
+                                <span className="text-[9px] tracking-[0.2em] uppercase text-gray-400 font-sans">
+                                  {translate("Price")}
+                                </span>
+                                <span className="text-sm font-semibold text-[#1A1A1A]">${p.price.toFixed(2)}</span>
+                              </div>
+                            </div>
+
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
 
             
@@ -1491,573 +1652,7 @@ export default function App() {
       )}
 
 
-        {/* AI CONCIERGE & SEARCH TAB */}
-        {activeTab === "ai-concierge" && (
-          <div id="ai-concierge-tab-content" className="max-w-[1700px] mx-auto px-6 sm:px-12 md:px-16 py-12">
-            
-            {/* Header Description */}
-            <div className="text-center max-w-2xl mx-auto mb-12">
-              <span className="text-[10px] uppercase tracking-[0.4em] text-[#A68B67] font-bold">{translate("Intelligent Gift Curation")}</span>
-              <h2 className="text-3xl md:text-4xl font-serif font-semibold italic text-[#4A5D4E] mt-2 mb-4">
-                {translate("The Master AI Concierge")}
-              </h2>
-              <div className="w-12 h-0.5 bg-[#A68B67] mx-auto mb-4" />
-              <p className="text-xs md:text-sm text-[#666] leading-relaxed uppercase tracking-wider">
-                {translate("Struggling to track down the absolute perfect present? Formulate recipient preferences and allow our customized generative AI models to build a bespoke memory guide.")}
-              </p>
-            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-              
-              {/* Form Input Side */}
-              <form 
-                onSubmit={handleAiFinderSubmit} 
-                className="lg:col-span-5 bg-white p-8 border border-[#F0EDEA] premium-shadow space-y-6"
-              >
-                <div className="border-b border-[#F0EDEA] pb-3 mb-2 flex items-center gap-2">
-                  <span className="text-[11px] uppercase tracking-[0.25em] font-bold text-[#4A5D4E]">{translate("Configure Curation")}</span>
-                </div>
-
-                {/* Question 1: Recipient Identity & Age */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Recipient Age")}</label>
-                    <select
-                      value={aiFinderRequest.recipientProfile.ageGroup}
-                      onChange={(e: any) => setAiFinderRequest(prev => ({
-                        ...prev,
-                        recipientProfile: { ...prev.recipientProfile, ageGroup: e.target.value }
-                      }))}
-                      className="w-full p-2 border border-[#E5E2DE] bg-[#F5F2EE] text-xs focus:outline-none focus:border-[#4A5D4E]"
-                    >
-                      <option value="Child">{translate("Child (0-12)")}</option>
-                      <option value="Teenager">{translate("Teenager (13-19)")}</option>
-                      <option value="Young Adult">{translate("Young Adult (20-29)")}</option>
-                      <option value="Adult">{translate("Adult (30-65)")}</option>
-                      <option value="Senior">{translate("Senior (65+)")}</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Elegance Focus")}</label>
-                    <select
-                      value={aiFinderRequest.recipientProfile.genderPreference}
-                      onChange={(e: any) => setAiFinderRequest(prev => ({
-                        ...prev,
-                        recipientProfile: { ...prev.recipientProfile, genderPreference: e.target.value }
-                      }))}
-                      className="w-full p-2 border border-[#E5E2DE] bg-[#F5F2EE] text-xs focus:outline-none focus:border-[#4A5D4E]"
-                    >
-                      <option value="Neutral">{translate("Neutral Classic")}</option>
-                      <option value="Feminine">{translate("Feminine Chic")}</option>
-                      <option value="Masculine">{translate("Masculine Tailored")}</option>
-                      <option value="Any">{translate("Exuberant / All")}</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Question 2: Hobbies / Passions (Upgraded to Cinema Bubble Dashboard) */}
-                <div className="space-y-3">
-                  <div className="flex justify-between items-baseline">
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block">
-                      {translate("Artisanal Passions & Interests")}
-                    </label>
-                    <span className="text-[8.5px] text-[#A68B67] font-serif italic">
-                      {selectedHobbies.length} {translate("selected")}
-                    </span>
-                  </div>
-
-                  {/* Active Selected Bubble Cloud */}
-                  <div className="p-3 bg-[#FCFAF7] border border-[#E8E4DF] min-h-[58px] transition-all duration-300 relative group">
-                    {selectedHobbies.length === 0 ? (
-                      <div className="text-center py-2 text-[10px] text-gray-400 italic font-serif">
-                        {translate("No passion bubbles selected. Type below or tap preloads!")}
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        <AnimatePresence>
-                          {selectedHobbies.map((hobby) => (
-                            <motion.button
-                              type="button"
-                              key={hobby}
-                              layoutId={`selected-bubble-${hobby}`}
-                              initial={{ scale: 0.8, opacity: 0 }}
-                              animate={{ scale: 1, opacity: 1 }}
-                              exit={{ scale: 0.8, opacity: 0 }}
-                              whileHover={{ scale: 1.05 }}
-                              whileTap={{ scale: 0.95 }}
-                              onClick={() => toggleHobby(hobby)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] bg-[#4A5D4E] text-white rounded-full border border-[#4A5D4E] shadow-sm transition-colors duration-150 font-sans"
-                            >
-                              <span>{translateBubble(hobby)}</span>
-                              <X className="w-2.5 h-2.5 hover:text-red-200" />
-                            </motion.button>
-                          ))}
-                        </AnimatePresence>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Bubble custom addition field & Web search triggers */}
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <input
-                        type="text"
-                        placeholder={translate("Type and hit Add...")}
-                        value={hobbySearchQuery}
-                        onChange={(e) => setHobbySearchQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            const val = hobbySearchQuery.trim();
-                            if (val) {
-                              if (!selectedHobbies.includes(val)) {
-                                setSelectedHobbies(prev => [...prev, val]);
-                              }
-                              setHobbySearchQuery("");
-                            }
-                          }
-                        }}
-                        className="w-full p-2 border border-[#E5E2DE] bg-[#FDFCFB] text-xs focus:outline-none focus:border-[#4A5D4E] pr-10"
-                      />
-                      {hobbySearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setHobbySearchQuery("")}
-                          className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const val = hobbySearchQuery.trim();
-                        if (val) {
-                          if (!selectedHobbies.includes(val)) {
-                            setSelectedHobbies(prev => [...prev, val]);
-                          }
-                          setHobbySearchQuery("");
-                        } else {
-                          triggerAlert("Please enter a custom interest first.", "info");
-                        }
-                      }}
-                      className="px-3 bg-[#4A5D4E] hover:bg-[#3D4F41] text-white text-xs font-bold font-sans tracking-wide uppercase transition-colors"
-                    >
-                      {translate("Add")}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => searchHobbyTrends(hobbySearchQuery || "Sport")}
-                      disabled={isHobbySearching}
-                      className="px-3 bg-[#A68B67] hover:bg-[#907653] text-white text-xs font-bold font-sans tracking-wide uppercase transition-colors inline-flex items-center gap-1.5"
-                    >
-                      {isHobbySearching ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Search className="w-3.5 h-3.5" />
-                      )}
-                      <span>{hobbySearchQuery ? translate("Search") : translate("Trends")}</span>
-                    </button>
-                  </div>
-
-                  {/* Web-Discovered Trend Bubbles Cloud */}
-                  <AnimatePresence>
-                    {internetHobbyBubbles.length > 0 && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="p-3 bg-gradient-to-br from-[#FAF8F5] to-white border border-[#E2D8C2] rounded space-y-2 overflow-hidden shadow-inner"
-                      >
-                        <div className="flex justify-between items-center">
-                          <span className="text-[9.5px] uppercase tracking-wider text-[#A68B67] font-semibold flex items-center gap-1">
-                            {translate("Internet-Grounded Ideas")} ({translate("Found for")} "{hobbySearchQuery || translate("Latest Trends")}")
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setInternetHobbyBubbles([])}
-                            className="text-[9px] text-[#A68B67] hover:underline"
-                          >
-                            {translate("Hide")}
-                          </button>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {internetHobbyBubbles.map((bubble, i) => {
-                            const isSelected = selectedHobbies.includes(bubble);
-                            return (
-                              <motion.button
-                                type="button"
-                                key={bubble}
-                                onClick={() => toggleHobby(bubble)}
-                                initial={{ scale: 0.8, opacity: 0 }}
-                                animate={{ scale: 1, opacity: 1 }}
-                                transition={{ delay: i * 0.04 }}
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                className={`px-2.5 py-1 text-[11px] rounded-full border transition-all duration-150 inline-flex items-center gap-1 font-sans ${
-                                  isSelected 
-                                    ? "bg-[#4A5D4E] text-white border-[#4A5D4E]" 
-                                    : "bg-white text-gray-700 border-[#E8E4DF] hover:border-[#A68B67] hover:bg-[#FCFAF7]"
-                                }`}
-                              >
-                                <span>{translate(bubble)}</span>
-                                {isSelected ? <Check className="w-2.5 h-2.5 ml-0.5 text-white" /> : <Plus className="w-2.5 h-2.5 ml-0.5 text-gray-400" />}
-                              </motion.button>
-                            );
-                          })}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Starter Curative Presets */}
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[8.5px] uppercase tracking-widest text-[#A68B67] font-bold block">
-                      {translate("Or Select Boutique Starters")}
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {SUGGESTED_HOBBIES_PRESETS.map((item, index) => {
-                        const bubbleStr = `${item.emoji} ${item.label}`;
-                        const isSelected = selectedHobbies.includes(bubbleStr);
-                        return (
-                          <motion.button
-                            type="button"
-                            key={index}
-                            onClick={() => toggleHobby(bubbleStr)}
-                            whileHover={{ scale: 1.03 }}
-                            whileTap={{ scale: 0.97 }}
-                            className={`px-2.5 py-1 text-[10.5px] border rounded-full transition-colors duration-150 inline-flex items-center gap-1 font-serif ${
-                              isSelected
-                                ? "bg-[#4A5D4E] text-white border-[#4A5D4E]"
-                                : "bg-[#FAF8F5] text-[#4A5D4E] border-[#E8E4DF] hover:bg-[#F3EDE6] hover:border-[#A68B67]"
-                            }`}
-                          >
-                            <span>{translateBubble(bubbleStr)}</span>
-                          </motion.button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Question 3: Occasion & Relationship */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Occasion")}</label>
-                    <select
-                      value={aiFinderRequest.occasion}
-                      onChange={(e: any) => setAiFinderRequest(prev => ({ ...prev, occasion: e.target.value }))}
-                      className="w-full p-2 border border-[#E5E2DE] bg-[#F5F2EE] text-xs focus:outline-none focus:border-[#4A5D4E]"
-                    >
-                      <option value="Birthday">{translate("Birthday")}</option>
-                      <option value="Anniversary">{translate("Anniversary")}</option>
-                      <option value="Graduation">{translate("Graduation")}</option>
-                      <option value="Wedding">{translate("Wedding")}</option>
-                      <option value="Mother's/Father's Day">{translate("Mother's/Father's Day")}</option>
-                      <option value="Thank You">{translate("Thank You")}</option>
-                      <option value="Holiday">{translate("Holiday Seasonal")}</option>
-                      <option value="Just Because">{translate("Just Because")}</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-1.5">{translate("Recipient Connection")}</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder={translate("E.g. Partner, Mom, Boss, Friend, Cousin")}
-                      value={aiFinderRequest.relationship}
-                      onChange={(e) => setAiFinderRequest(prev => ({ ...prev, relationship: e.target.value }))}
-                      className="w-full p-2 border border-[#E5E2DE] bg-[#F5F2EE] text-xs focus:outline-none focus:border-[#4A5D4E]"
-                    />
-                  </div>
-                </div>
-
-                {/* Question 4: Budget Limit Slider */}
-                <div>
-                  <div className="flex justify-between items-baseline mb-1">
-                    <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold">{translate("Maximum Budget")}</label>
-                    <span className="text-xs font-semibold text-[#4A5D4E]">${aiFinderRequest.budget} {translate("USD")}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="30"
-                    max="200"
-                    step="5"
-                    value={aiFinderRequest.budget}
-                    onChange={(e) => setAiFinderRequest(prev => ({ ...prev, budget: parseInt(e.target.value) }))}
-                    className="w-full accent-[#4A5D4E] h-1 bg-[#F5F2EE]"
-                  />
-                  <div className="flex justify-between text-[9px] text-[#A68B67] font-semibold mt-1">
-                    <span>$30</span>
-                    <span>$115</span>
-                    <span>$200</span>
-                  </div>
-                </div>
-
-                {/* Question 5: Aesthetic tone / Gift style */}
-                <div>
-                  <label className="text-[9px] uppercase tracking-widest text-[#A68B67] font-bold block mb-2">{translate("Desired Gifting Tone")}</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { id: "Elegant", desc: "Minimal & Refined" },
-                      { id: "Sensory & Cozy", desc: "Cozy & High Aesthetic" },
-                      { id: "Sentimental", desc: "Deeply Nostalgic" },
-                      { id: "Practical", desc: "Everyday Masterpieces" }
-                    ].map(st => (
-                      <button
-                        key={st.id}
-                        type="button"
-                        onClick={() => setAiFinderRequest(prev => ({ ...prev, giftStyle: st.id as any }))}
-                        className={`p-2.5 border text-left rounded-none transition-all ${
-                          aiFinderRequest.giftStyle === st.id
-                            ? "bg-[#4A5D4E]/10 border-[#4A5D4E] text-[#4A5D4E]"
-                            : "bg-[#FDFCFB] border-[#E5E2DE] text-[#666] hover:bg-[#F5F2EE]"
-                        }`}
-                      >
-                        <div className="text-[10px] font-bold uppercase tracking-wider">{translate(st.id)}</div>
-                        <div className="text-[8px] text-[#A68B67] font-medium leading-tight">{translate(st.desc)}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isAiLoading}
-                  className="w-full py-4 bg-[#4A5D4E] hover:bg-[#3d4d40] text-white text-[11px] uppercase tracking-[0.2em] transition-all font-semibold flex items-center justify-center gap-2"
-                >
-                  {isAiLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {translate("Curation In Progress...")}
-                    </>
-                  ) : (
-                    <>
-                      {translate("Formulate Recommendations")}
-                    </>
-                  )}
-                </button>
-              </form>
-
-              {/* Response Display Side */}
-              <div className="lg:col-span-7 bg-white p-8 border border-[#F0EDEA] premium-shadow min-h-[500px] flex flex-col justify-between">
-                
-                {/* Initial Screen / Empty State */}
-                {!isAiLoading && !aiResponse && !aiError && (
-                  <div className="flex-1 flex flex-col justify-center items-center text-center p-6 space-y-4">
-                    <div className="relative">
-                      <div className="w-16 h-16 bg-[#F5F2EE] rounded-full flex items-center justify-center text-[#4A5D4E] border border-[#E5E2DE]">
-                        <Gift className="w-8 h-8 text-[#A68B67]" />
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-serif italic text-xl font-medium text-[#4A5D4E] mb-2">{translate("Waiting for curation inputs")}</h3>
-                      <p className="text-xs text-[#666] max-w-sm leading-relaxed mx-auto">
-                        {translate("Configure the personality profile on the left and tap \"Formulate Recommendations.\" Our master intelligence will calculate gorgeous bespoke options.")}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Loading State */}
-                {isAiLoading && (
-                  <div className="flex-1 flex flex-col justify-center items-center text-center p-12 space-y-4">
-                    <Loader2 className="w-10 h-10 text-[#4A5D4E] animate-spin" />
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-widest text-[#A68B67] font-bold animate-pulse">{translate("Consulting Master Curation Guide")}</p>
-                      <p className="text-xs text-[#666] lowercase italic font-serif">"{translate("Selecting ribbons, weighing wood density, painting truffles...")}"</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Error Banner with graceful fallback prompt */}
-                {aiError && (
-                  <div className="flex-1 flex flex-col justify-center p-6 bg-red-50 border border-red-200 rounded gap-3">
-                    <div className="flex items-center gap-2 text-red-800">
-                      <Info className="w-4 h-4" />
-                      <span className="font-semibold text-xs uppercase tracking-wider">{translate("Curation Engine Exception")}</span>
-                    </div>
-                    <p className="text-xs text-red-700 leading-relaxed">
-                      {translate("We were unable to secure direct Gemini 3.5 instructions due to setting errors.")} ({aiError}).
-                    </p>
-                    <p className="text-xs text-gray-600">
-                      {translate("Please verify your network access or proceed with our manual catalog curation below!")}
-                    </p>
-                  </div>
-                )}
-
-                {/* Real Curated Portfolio Response */}
-                {aiResponse && (
-                  <div className="space-y-8 animate-fade-in text-left">
-                    
-                    {/* Analysis header statement */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-[#FCFAF7] to-[#FAF5EE] p-6 border-l-4 border-[#4A5D4E] shadow-sm space-y-2 rounded-r"
-                    >
-                      <span className="text-[9.5px] uppercase tracking-widest text-[#A68B67] font-bold block">
-                        {translate("Aesthetic Psychological & Lifestyle Profile")}
-                      </span>
-                      <p className="text-xs md:text-sm text-[#2A2A2A] italic font-serif leading-relaxed">
-                        "{aiResponse.analysis}"
-                      </p>
-                      {aiResponse.warning && (
-                        <div className="mt-2 text-[10px] text-[#A68B67] font-sans font-semibold flex items-center gap-1.5 bg-white py-1 px-2.5 rounded border border-[#EBE6E0] inline-block">
-                          {translate("Boutique Intrinsic Mode active")}
-                        </div>
-                      )}
-                    </motion.div>
-
-                    {/* Section 1: In-Store Catalog Recommendations */}
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <h4 className="text-[10px] uppercase tracking-[0.25em] font-bold text-[#1A1A1A] flex items-center gap-2">
-                          <span className="w-2 h-2 bg-[#4A5D4E] rounded-full animate-pulse" />
-                          {translate("Aesthetic Store Matches")}
-                        </h4>
-                        <span className="text-[9px] text-[#A68B67] font-mono italic">
-                          {translate("Click catalog options to inspect details")}
-                        </span>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {aiResponse.suggestedCatalogProductIds.slice(0, 4).map((id, index) => {
-                          const prod = CATALOG.find(p => p.id === id);
-                          if (!prod) return null;
-                          return (
-                            <motion.div 
-                              key={prod.id} 
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: index * 0.1 }}
-                              whileHover={{ y: -4, boxShadow: "0 10px 25px -5px rgba(74, 93, 78, 0.08)" }}
-                              className="flex gap-4 bg-white p-4 border border-[#E9E5E0] items-center rounded transition-all duration-200 group relative overflow-hidden"
-                            >
-                              <div className="absolute top-0 right-0 w-8 h-8 pointer-events-none">
-                                <div className="absolute transform rotate-45 bg-[#4A5D4E]/10 text-[8px] font-bold text-[#4A5D4E] py-1 text-center w-12 -right-3 top-1 scale-75 uppercase">
-                                  {translate("Fit")}
-                                </div>
-                              </div>
-                              <img 
-                                src={prod.image} 
-                                alt={prod.name} 
-                                referrerPolicy="no-referrer" 
-                                onClick={() => setSelectedProduct(prod)}
-                                className="w-14 h-18 object-cover bg-white shrink-0 border border-[#FAF8F5] shadow-sm group-hover:scale-105 transition-transform duration-300 cursor-pointer" 
-                              />
-                              <div className="min-w-0 flex-1 space-y-1">
-                                <h5 
-                                  onClick={() => setSelectedProduct(prod)}
-                                  className="text-[10.5px] uppercase tracking-wider font-bold text-[#1A1A1A] hover:text-[#4A5D4E] hover:underline cursor-pointer truncate"
-                                >
-                                  {translate(prod.name)}
-                                </h5>
-                                <p className="text-xs text-[#4A5D4E] font-bold">${prod.price.toFixed(2)}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => addToCart(prod, 1)}
-                                  className="text-[10px] uppercase tracking-widest text-white bg-[#4A5D4E] hover:bg-[#3D4F41] px-2.5 py-1 transition-colors duration-150 rounded font-sans inline-block mt-1 font-semibold"
-                                >
-                                  {translate("+ Add to Bag")}
-                                </button>
-                              </div>
-                            </motion.div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Section 2: Bespoke Creative Ideas (outside the catalog) */}
-                    <div className="space-y-3">
-                      <h4 className="text-[10px] uppercase tracking-[0.25em] font-bold text-[#1A1A1A] flex items-center gap-2">
-                        <span className="w-2 h-2 bg-[#A68B67] rounded-full" />
-                        {translate("Bespoke Creative Experiences (DIY / Custom Curation)")}
-                      </h4>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {aiResponse.bespokeSuggestions.map((idea, index) => (
-                          <motion.div 
-                            key={index}
-                            initial={{ opacity: 0, scale: 0.96 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ delay: index * 0.15 }}
-                            whileHover={{ y: -2 }}
-                            className="bg-[#FCFAF7] p-5 border border-[#ECE7E0] space-y-3 rounded hover:border-[#A68B67] transition-all duration-200 relative overflow-hidden text-left"
-                          >
-                            <span className="absolute top-2 right-2.5 bg-[#A68B67]/10 text-[#A68B67] text-[8.5px] tracking-wider uppercase font-mono px-2 py-0.5 rounded-full font-bold">
-                              {idea.estimatedCost}
-                            </span>
-                            <div className="space-y-1.5 pr-14">
-                              <span className="text-[9px] uppercase tracking-widest font-bold text-[#A68B67] block">{translate("Keepsake Idea")} {index + 1}</span>
-                              <h5 className="text-[11px] uppercase tracking-wider font-bold text-[#4A5D4E] leading-snug">{idea.title}</h5>
-                            </div>
-                            <p className="text-[11.5px] text-gray-700 leading-relaxed font-sans">{idea.description}</p>
-                            <div className="text-[11px] text-[#A68B67] italic font-serif pt-2.5 border-t border-[#EDEAE3]">
-                              <strong>{translate("Curation intent:")}</strong> {idea.reasoning}
-                            </div>
-                          </motion.div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Section 3: Visual Unpacking Ceremony Recommendation */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-5 border-t border-[#EAE6DF]">
-                      <div className="space-y-2 bg-[#FBF9F5] p-5 border border-[#EDEAE2] rounded text-left">
-                        <div className="flex items-center gap-1.5 text-[#A68B67]">
-                          <h4 className="text-[10.5px] uppercase tracking-[0.2em] font-bold">{translate("Unpacking Ceremony")}</h4>
-                        </div>
-                        <p className="text-[11.5px] text-[#54524F] leading-relaxed font-sans italic">
-                          "{aiResponse.giftWrappingRecommendation}"
-                        </p>
-                      </div>
-
-                      {/* Section 4: Personalized Greeting message card */}
-                      <div className="space-y-2 text-left">
-                        <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#4A5D4E]">{translate("Handwritten Greeting Card Text")}</h4>
-                        <div className="bg-[#FCFBF8] p-5 border border-dashed border-[#A68B67] relative group shadow-inner rounded space-y-4">
-                          <p className="text-[12px] text-[#1A1A1A] italic font-serif leading-relaxed px-2">
-                            "{aiResponse.curatedGreetingMessage}"
-                          </p>
-                          <div className="flex justify-between items-center pt-2">
-                            <span className="text-[8.5px] tracking-widest uppercase text-[#A68B67] font-semibold block">
-                              {translate("PresentPerfect Stationery Co.")}
-                            </span>
-                            <motion.button
-                              whileHover={{ scale: 1.05 }}
-                              whileTap={{ scale: 0.95 }}
-                              onClick={async () => {
-                                const ok = await copyToClipboard(aiResponse?.curatedGreetingMessage || "");
-                                if (ok) {
-                                  triggerAlert("Cozy greeting card copied to clipboard!", "success");
-                                } else {
-                                  triggerAlert("Copy block restricted by iframe security. Please select and copy manually.", "info");
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#F5F2EE] hover:bg-[#EAE7E2] transition-colors rounded text-[10px] uppercase tracking-widest text-[#4A5D4E] font-semibold"
-                            >
-                              <Copy className="w-3 h-3 text-[#4A5D4E]" />
-                              <span>{translate("Copy Message")}</span>
-                            </motion.button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                  </div>
-                )}
-
-              </div>
-
-            </div>
-
-          </div>
-        )}
 
 
         {/* CELEBRATION REGISTRY TAB */}
@@ -3464,10 +3059,10 @@ export default function App() {
                   {translate("Wander Catalog")}
                 </button>
                 <button 
-                  onClick={() => setActiveTab("ai-concierge")}
+                  onClick={() => setActiveTab("inquiry")}
                   className="px-6 py-3 bg-[#FAF7F1] border border-[#E2D8C2] text-gray-700 text-[10px] uppercase tracking-widest font-bold hover:bg-[#EAE7E2] transition-colors"
                 >
-                  {translate("Consult AI Concierge")}
+                  {translate("Send an Inquiry")}
                 </button>
               </div>
             </div>
@@ -3612,23 +3207,36 @@ export default function App() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            <div className="max-w-3xl mx-auto">
               
-              {/* Left Form: submit inquiries */}
-              <div className="lg:col-span-7 bg-[#FAF7F1] border border-[#E2D8C2] p-6 sm:p-10 space-y-6 relative overflow-hidden">
-                {/* Visual traditional decoration */}
-                <div className="absolute top-0 left-0 w-2 h-full bg-[#4A5D4E]/20" />
+              {/* Inquiry Form: Centered & Cinematic */}
+              <div className="bg-[#FAF7F1] border border-[#E2D8C2] p-8 sm:p-12 space-y-8 relative overflow-hidden rounded shadow-sm">
+                {/* Visual traditional decoration lines */}
+                <div className="absolute top-0 left-0 w-2 h-full bg-[#4A5D4E]" />
+                <div className="absolute top-0 right-0 w-2 h-full bg-[#4A5D4E]/30" />
                 
+                {/* Supabase connection status indicator badge */}
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-[#E2D8C2] p-3 rounded text-[10px] tracking-widest uppercase font-bold text-gray-700">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4A5D4E] opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4A5D4E]"></span>
+                    </div>
+                    <span>{translate("Supabase Storage Pipeline")}</span>
+                  </div>
+                  <span className="text-[#4A5D4E] font-extrabold">{translate("SECURE & ACTIVE CONNECTED")}</span>
+                </div>
+
                 {inquirySuccess ? (
                   <div className="space-y-6 py-6 text-center animate-fade-in">
                     <div className="w-16 h-16 border-2 border-dashed border-[#4A5D4E] bg-[#4A5D4E]/5 rounded-full flex items-center justify-center mx-auto text-[#4A5D4E]">
-                      <Check className="w-8 h-8" />
+                      <Check className="w-8 h-8 animate-pulse" />
                     </div>
                     <div className="space-y-2">
                       <span className="text-xs uppercase tracking-widest text-[#A68B67] font-bold block">
                         咨询登记成功 / Inscribed in Parlor Ledgers
                       </span>
-                      <h3 className="text-2xl font-serif italic text-[#1C1814]">
+                      <h3 className="text-2xl font-serif italic text-[#1C1814] font-bold">
                         Correspondence Registered
                       </h3>
                       <p className="text-xs text-gray-600 leading-relaxed max-w-md mx-auto">
@@ -3646,68 +3254,73 @@ export default function App() {
                           setInquiryCallback(false);
                           setInquirySealEnvelope(true);
                         }}
-                        className="px-6 py-2.5 bg-white border border-[#E2D8C2] text-gray-700 text-[10px] uppercase tracking-widest font-bold hover:bg-[#EAE7E2] transition-all"
+                        className="px-6 py-2.5 bg-white border border-[#E2D8C2] text-gray-700 text-[10px] uppercase tracking-widest font-bold hover:bg-[#EAE7E2] transition-all rounded"
                       >
                         Submit Another Request
                       </button>
                       <button 
                         onClick={() => setActiveTab("shop")}
-                        className="px-6 py-2.5 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors"
+                        className="px-6 py-2.5 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors rounded"
                       >
                         Return to Catalog
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <form onSubmit={handleInquirySubmit} className="space-y-5">
-                    <h3 className="text-xl font-serif italic text-[#1C1814] flex items-center gap-2">
-                      <Mail className="w-5 h-5 text-[#4A5D4E]" />
-                      Write to our Archivists
-                    </h3>
-                    <p className="text-xs text-gray-500 leading-relaxed">
-                      Every letter is read with deep presence by humans, never automated bots. Fields are checked for offline ink compatibility.
-                    </p>
+                  <form onSubmit={handleInquirySubmit} className="space-y-6">
+                    <div className="border-b border-[#E2D8C2]/60 pb-4">
+                      <h3 className="text-2xl font-serif italic text-[#1C1814] flex items-center gap-2 font-bold justify-center">
+                        <Mail className="w-6 h-6 text-[#4A5D4E]" />
+                        Write to our Archivists
+                      </h3>
+                      <p className="text-center text-xs text-gray-500 leading-relaxed max-w-md mx-auto mt-2">
+                        Every letter is read with deep presence by humans, never automated bots. Fields are checked for offline ink compatibility and securely synchronized to the database.
+                      </p>
+                    </div>
 
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-gray-600 font-bold mb-1.5" htmlFor="inq-name">
-                          Full Name / Designation
-                        </label>
-                        <input 
-                          id="inq-name"
-                          type="text"
-                          required
-                          value={inquiryName}
-                          onChange={(e) => setInquiryName(e.target.value)}
-                          placeholder="Honored Recipient"
-                          className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all"
-                        />
+                    <div className="space-y-5">
+                      {/* Grid for Name & Email to organize and fit beautifully */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-name">
+                            Full Name / Designation
+                          </label>
+                          <input 
+                            id="inq-name"
+                            type="text"
+                            required
+                            value={inquiryName}
+                            onChange={(e) => setInquiryName(e.target.value)}
+                            placeholder="Honored Recipient"
+                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-email">
+                            Electronic Mail Address
+                          </label>
+                          <input 
+                            id="inq-email"
+                            type="email"
+                            required
+                            value={inquiryEmail}
+                            onChange={(e) => setInquiryEmail(e.target.value)}
+                            placeholder="name@destination.com"
+                            className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded shadow-inner"
+                          />
+                        </div>
                       </div>
 
                       <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-gray-600 font-bold mb-1.5" htmlFor="inq-email">
-                          Electronic Mail Address
-                        </label>
-                        <input 
-                          id="inq-email"
-                          type="email"
-                          required
-                          value={inquiryEmail}
-                          onChange={(e) => setInquiryEmail(e.target.value)}
-                          placeholder="name@destination.com"
-                          className="w-full bg-white border border-[#E2D8C2] h-11 px-4 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-gray-600 font-bold mb-1.5" htmlFor="inq-specialty">
+                        <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-specialty">
                           Inquired Traditional Specialty
                         </label>
                         <select 
                           id="inq-specialty"
                           value={inquirySpecialty}
                           onChange={(e) => setInquirySpecialty(e.target.value)}
-                          className="w-full bg-white border border-[#E2D8C2] h-11 px-3 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all"
+                          className="w-full bg-white border border-[#E2D8C2] h-11 px-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all rounded cursor-pointer shadow-inner"
                         >
                           <option value="Hand-Carved Red Sandalwood Chests">Hand-Carved Red Sandalwood Chests</option>
                           <option value="Celadon Jade Imperial Tea Sets">Celadon Jade Imperial Tea Sets</option>
@@ -3719,7 +3332,7 @@ export default function App() {
                       </div>
 
                       <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-gray-600 font-bold mb-1.5" htmlFor="inq-msg">
+                        <label className="block text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold mb-1.5" htmlFor="inq-msg">
                           Your Inquiry / Handwritten Note
                         </label>
                         <textarea 
@@ -3729,31 +3342,34 @@ export default function App() {
                           value={inquiryMessage}
                           onChange={(e) => setInquiryMessage(e.target.value)}
                           placeholder="Express your vision or questions in detail. Mention material weights, wax-sealing custom texts, or wood carvings..."
-                          className="w-full bg-white border border-[#E2D8C2] p-4 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all resize-none"
+                          className="w-full bg-white border border-[#E2D8C2] p-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#4A5D4E] transition-all resize-none rounded shadow-inner"
                         />
                       </div>
 
-                      <div className="space-y-2.5 pt-2">
-                        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      {/* Checkboxes layout made clean and elegant */}
+                      <div className="bg-white border border-[#E2D8C2] p-4 rounded space-y-3 shadow-inner">
+                        <label className="flex items-start gap-3 cursor-pointer select-none">
                           <input 
                             type="checkbox"
-                            className="mt-0.5"
+                            className="mt-1 h-3.5 w-3.5 accent-[#4A5D4E] cursor-pointer"
                             checked={inquiryCallback}
                             onChange={(e) => setInquiryCallback(e.target.checked)}
                           />
-                          <span className="text-[11px] text-gray-650 leading-tight">
+                          <span className="text-[11px] text-gray-750 leading-relaxed">
                             I request a custom callback or personal audio transmission from Mount Mogan's head archivist regarding calligraphic elements.
                           </span>
                         </label>
 
-                        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                        <div className="h-px bg-gray-100" />
+
+                        <label className="flex items-start gap-3 cursor-pointer select-none">
                           <input 
                             type="checkbox"
-                            className="mt-0.5"
+                            className="mt-1 h-3.5 w-3.5 accent-[#4A5D4E] cursor-pointer"
                             checked={inquirySealEnvelope}
                             onChange={(e) => setInquirySealEnvelope(e.target.checked)}
                           />
-                          <span className="text-[11px] text-gray-650 leading-tight">
+                          <span className="text-[11px] text-gray-750 leading-relaxed">
                             Wrap my reply package in traditional, wax-stamped cedar leaf parchment, free of cost.
                           </span>
                         </label>
@@ -3762,97 +3378,41 @@ export default function App() {
 
                     <button 
                       type="submit"
-                      className="w-full h-12 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-widest font-bold hover:bg-[#3d4d40] transition-colors flex items-center justify-center gap-2"
+                      className="w-full h-12 bg-[#4A5D4E] text-white text-[10px] uppercase tracking-[0.25em] font-extrabold hover:bg-[#3d4d40] transition-all duration-300 flex items-center justify-center gap-2 rounded shadow-sm hover:shadow"
                     >
-                      <span>Inscribe & Dispatched Inquiries</span>
+                      <span>Inscribe & Dispatch Inquiry</span>
                       <ChevronRight className="w-4 h-4" />
                     </button>
                   </form>
                 )}
               </div>
 
-              {/* Right Panel: Address & historical inquiry list */}
-              <div className="lg:col-span-12 xl:col-span-5 space-y-8 lg:grid lg:grid-cols-2 lg:gap-8 xl:block xl:space-y-8">
-                
-                {/* Physical details block */}
-                <div className="bg-white border border-[#E2D8C2] p-6 space-y-4">
-                  <h4 className="text-md font-serif font-bold text-[#1C1814] uppercase tracking-wider">
-                    Our Mountain Atelier
+              {/* Historic Registry & Sent Correspondence List */}
+              {userInquiries.length > 0 && (
+                <div className="mt-12 bg-white border border-[#E2D8C2] p-6 rounded space-y-4 shadow-xs animate-fade-in">
+                  <h4 className="text-[11px] uppercase tracking-[0.25em] font-extrabold text-[#4A5D4E] border-b border-gray-100 pb-2">
+                    {translate("Your Historic Correspondence")} ({userInquiries.length})
                   </h4>
-                  <div className="w-8 h-0.5 bg-[#4A5D4E]" />
-                  <p className="text-xs text-gray-650 leading-relaxed">
-                    All inquiries are channeled towards our preservation headquarters nestled inside Bamboo Forest Grove of Sector 4, Zhejiang mountain valleys.
-                  </p>
-                  
-                  <div className="space-y-2 text-xs text-gray-500">
-                    <div>
-                      <strong className="text-[#1C1814] uppercase font-bold tracking-widest text-[9px] block">Location</strong>
-                      <span>North Foothills Grove • Zhejiang Province Prefecture</span>
-                    </div>
-                    <div>
-                      <strong className="text-[#1C1814] uppercase font-bold tracking-widest text-[9px] block">Atelier Hours</strong>
-                      <span>Daily: 09:00 – 17:00 (Aligned with local solar movements)</span>
-                    </div>
-                    <div>
-                      <strong className="text-[#1C1814] uppercase font-bold tracking-widest text-[9px] block">Telephone</strong>
-                      <span>+86 (0572) 88-MOGAN (Heritage line)</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Submissions List Panel ( Tactile Feedback Proof! ) */}
-                <div className="bg-white border border-[#E2D8C2] p-6 space-y-4">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-xs font-serif font-bold text-[#1C1814] uppercase tracking-wider">
-                      Your Parchment Records ({userInquiries.length})
-                    </h4>
-                    {userInquiries.length > 0 && (
-                      <button 
-                        onClick={() => {
-                          setUserInquiries([]);
-                          triggerAlert("All local offline entries cleared safely.", "info");
-                        }}
-                        className="text-[9px] uppercase tracking-widest font-bold text-red-700 hover:underline"
-                      >
-                        Clear ledger
-                      </button>
-                    )}
-                  </div>
-                  <div className="w-8 h-0.5 bg-[#A68B67]" />
-                  
-                  {userInquiries.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic py-4 text-center">
-                      No inquiries in your current session ledger. Submit a inquiry note to populate this parchment.
-                    </p>
-                  ) : (
-                    <div className="space-y-3 max-h-[300px] overflow-y-auto divide-y divide-[#E2D8C2]/40 pr-1">
-                      {userInquiries.map((inq: any, idx: number) => (
-                        <div key={inq.id || idx} className="pt-3 first:pt-0 space-y-1.5 text-xs">
-                          <div className="flex justify-between items-start">
-                            <span className="font-bold text-[#1C1814] truncate max-w-[150px]">{inq.name}</span>
-                            <span className="text-[9px] text-[#A68B67] font-bold">{inq.date}</span>
-                          </div>
-                          <div className="text-[10px] uppercase font-bold text-[#4A5D4E]">
-                            🏷️ {inq.specialty}
-                          </div>
-                          <p className="text-gray-600 leading-normal line-clamp-2 text-[11px] italic bg-[#FAF7F1] p-2 border-l border-[#A68B67]">
-                            "{inq.message}"
-                          </p>
-                          <div className="flex gap-2 text-[9px] text-gray-400 uppercase font-bold">
-                            <span>{inq.callback ? "✓ Callback" : "✖ No Callback"}</span>
-                            <span>•</span>
-                            <span>{inq.sealed ? "✓ Sealed Reply" : "✖ Standard paper"}</span>
-                          </div>
+                  <div className="space-y-4 divide-y divide-gray-100 max-h-[300px] overflow-y-auto pr-2">
+                    {userInquiries.map((inq: any) => (
+                      <div key={inq.id} className="pt-3 first:pt-0 space-y-1.5 text-left text-xs">
+                        <div className="flex justify-between items-baseline">
+                          <span className="font-bold text-gray-800">{inq.name}</span>
+                          <span className="text-[10px] text-gray-400 font-mono">{inq.date}</span>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        <div className="text-[10px] text-[#A68B67] uppercase tracking-wider font-semibold">
+                          Specialty: {translate(inq.specialty)}
+                        </div>
+                        <p className="text-gray-600 bg-[#FCFAF7] p-2 border border-gray-100 italic rounded">
+                          "{inq.message}"
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              )}
 
-              </div>
-              
             </div>
-
           </div>
         )}
 
@@ -4347,11 +3907,11 @@ export default function App() {
             <ul className="text-[11px] text-gray-600 space-y-2.5 font-medium">
               <li>
                 <button 
-                  onClick={() => { setActiveTab("ai-concierge"); window.scrollTo({ top: 0, behavior: "smooth" }); }} 
+                  onClick={() => { setActiveTab("inquiry"); window.scrollTo({ top: 0, behavior: "smooth" }); }} 
                   className="hover:text-[#4A5D4E] hover:translate-x-1 transition-all duration-300 text-left flex items-center gap-1 group"
                 >
                   <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[#A68B67]">&bull;</span>
-                  {translate("The Master Curator")}
+                  {translate("Direct Inquiry Desk")}
                 </button>
               </li>
               <li>
